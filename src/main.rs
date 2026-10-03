@@ -8,6 +8,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
+const NIXOS_CONFIG_DIR: &str = "/etc/nixos";
 const HARDWARE_CONFIG: &str = "/etc/nixos/hardware-configuration.nix";
 const GENERATE_CONFIG_COMMAND: &str = "nixos-generate-config";
 
@@ -48,6 +49,12 @@ fn merge_status(current: CheckStatus, next: CheckStatus) -> CheckStatus {
 
 fn check_hardware_configuration() -> CheckStatus {
     println!("[hardware]");
+
+    if !Path::new(NIXOS_CONFIG_DIR).is_dir() {
+        println!("  ! missing NixOS configuration directory: {NIXOS_CONFIG_DIR}");
+        println!("  This installer must be run on a NixOS system with /etc/nixos available.");
+        return CheckStatus::Warning;
+    }
 
     if Path::new(HARDWARE_CONFIG).is_file() {
         println!("  ✓ found: {HARDWARE_CONFIG}");
