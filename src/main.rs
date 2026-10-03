@@ -332,10 +332,9 @@ fn run_generate_config(privilege: Option<&Path>) -> io::Result<()> {
     if status.success() {
         Ok(())
     } else {
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("{command:?} exited with {status}"),
-        ))
+        Err(io::Error::other(format!(
+            "{command:?} exited with {status}"
+        )))
     }
 }
 
