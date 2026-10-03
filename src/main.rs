@@ -157,7 +157,9 @@ fn check_privilege_helper() -> CheckStatus {
 fn check_neodots_configuration() -> CheckStatus {
     println!("[neodots]");
     println!("  Repository: {NEODOTS_REPOSITORY}");
-    println!("  The repository will be cloned into a temporary directory and checked without applying it.");
+    println!(
+        "  The repository will be cloned into a temporary directory and checked without applying it."
+    );
 
     match prompt_yes_no("  Clone and validate Neodots now? [y/N] ") {
         Ok(false) => {
