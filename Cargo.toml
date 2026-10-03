@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 kaayzouee
+# Author: https://github.com/kaayzouee
+
+[package]
+name = "neodots-installer"
+version = "0.1.0"
+edition = "2024"
+description = "Preflight scanner for the Neodots NixOS installer"
+license = "GPL-3.0-only"
+repository = "https://github.com/kaayzouee/neodots-installer"
+
+[[bin]]
+name = "neodots-installer"
+path = "src/main.rs"
