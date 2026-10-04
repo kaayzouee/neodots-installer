@@ -202,9 +202,7 @@ fn check_nixos(target: &TargetRoot) -> Result<(), String> {
     Ok(())
 }
 
-fn check_hardware_configuration(
-    target: &TargetRoot,
-) -> Result<HardwarePreparation, String> {
+fn check_hardware_configuration(target: &TargetRoot) -> Result<HardwarePreparation, String> {
     let nixos_dir = target.nixos_config_dir();
 
     if !nixos_dir.is_dir() {
@@ -224,9 +222,7 @@ fn check_hardware_configuration(
 
     println!("[hardware]");
     println!("  ! missing: {}", hardware_config.display());
-    println!(
-        "  Hardware configuration can be generated in disposable validation staging."
-    );
+    println!("  Hardware configuration can be generated in disposable validation staging.");
 
     if prompt_yes_no("  Generate hardware configuration during validation? [y/N] ")? {
         Ok(HardwarePreparation::GenerateInStaging)
@@ -350,10 +346,7 @@ fn detect_system() -> Result<String, String> {
         .map_err(|error| format!("failed to execute uname: {error}"))?;
 
     if !output.status.success() {
-        return Err(format!(
-            "uname failed with status {}",
-            output.status
-        ));
+        return Err(format!("uname failed with status {}", output.status));
     }
 
     let architecture = String::from_utf8(output.stdout)
@@ -368,7 +361,7 @@ fn detect_system() -> Result<String, String> {
         other => {
             return Err(format!(
                 "unsupported system architecture reported by uname: {other}"
-            ))
+            ));
         }
     };
 
@@ -389,9 +382,7 @@ fn detect_target_username(target: &TargetRoot) -> Result<String, String> {
     }
 
     if !target.is_live_root() {
-        return Err(
-            "NEODOTS_TARGET_USER must be set when NEODOTS_NIXOS_ROOT is not /".to_string(),
-        );
+        return Err("NEODOTS_TARGET_USER must be set when NEODOTS_NIXOS_ROOT is not /".to_string());
     }
 
     for variable in ["SUDO_USER", "USER", "LOGNAME"] {
@@ -406,22 +397,12 @@ fn detect_target_username(target: &TargetRoot) -> Result<String, String> {
         }
     }
 
-    Err(
-        "could not determine the target username; set NEODOTS_TARGET_USER explicitly"
-            .to_string(),
-    )
+    Err("could not determine the target username; set NEODOTS_TARGET_USER explicitly".to_string())
 }
 
-fn lookup_home_directory(
-    target: &TargetRoot,
-    username: &str,
-) -> Result<String, String> {
-    let passwd = fs::read_to_string(target.passwd_path()).map_err(|error| {
-        format!(
-            "cannot read {}: {error}",
-            target.passwd_path().display()
-        )
-    })?;
+fn lookup_home_directory(target: &TargetRoot, username: &str) -> Result<String, String> {
+    let passwd = fs::read_to_string(target.passwd_path())
+        .map_err(|error| format!("cannot read {}: {error}", target.passwd_path().display()))?;
 
     for line in passwd.lines() {
         if line.trim().is_empty() || line.starts_with('#') {
@@ -469,10 +450,7 @@ fn detect_hostname(target: &TargetRoot) -> Result<String, String> {
         .map_err(|error| format!("failed to execute hostname: {error}"))?;
 
     if !output.status.success() {
-        return Err(format!(
-            "hostname failed with status {}",
-            output.status
-        ));
+        return Err(format!("hostname failed with status {}", output.status));
     }
 
     let hostname = String::from_utf8(output.stdout)
@@ -488,62 +466,31 @@ fn detect_hostname(target: &TargetRoot) -> Result<String, String> {
 }
 
 fn read_existing_machine_config(path: &Path) -> Result<MachineConfig, String> {
-    let contents = fs::read_to_string(path).map_err(|error| {
-        format!("cannot read {}: {error}", path.display())
-    })?;
+    let contents = fs::read_to_string(path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
 
     let system = parse_string_assignment(&contents, "system")
         .ok_or_else(|| format!("missing system in {}", path.display()))?;
 
-    let username = parse_block_string_assignment(
-        &contents,
-        "neodots",
-        "username",
-    )
-    .ok_or_else(|| format!("missing neodots.username in {}", path.display()))?;
+    let username = parse_block_string_assignment(&contents, "neodots", "username")
+        .ok_or_else(|| format!("missing neodots.username in {}", path.display()))?;
 
-    let hostname = parse_block_string_assignment(
-        &contents,
-        "neodots",
-        "hostname",
-    )
-    .ok_or_else(|| format!("missing neodots.hostname in {}", path.display()))?;
+    let hostname = parse_block_string_assignment(&contents, "neodots", "hostname")
+        .ok_or_else(|| format!("missing neodots.hostname in {}", path.display()))?;
 
-    let home_directory = parse_block_string_assignment(
-        &contents,
-        "neodots",
-        "homeDirectory",
-    )
-    .ok_or_else(|| {
-        format!(
-            "missing neodots.homeDirectory in {}",
-            path.display()
-        )
-    })?;
+    let home_directory = parse_block_string_assignment(&contents, "neodots", "homeDirectory")
+        .ok_or_else(|| format!("missing neodots.homeDirectory in {}", path.display()))?;
 
-    let personal_enable = parse_nested_bool_assignment(
-        &contents,
-        "neodots",
-        "personal",
-        "enable",
-    )
-    .unwrap_or(false);
+    let personal_enable =
+        parse_nested_bool_assignment(&contents, "neodots", "personal", "enable").unwrap_or(false);
 
-    let persistence_enable = parse_nested_bool_assignment(
-        &contents,
-        "neodots",
-        "persistence",
-        "enable",
-    )
-    .unwrap_or(false);
+    let persistence_enable =
+        parse_nested_bool_assignment(&contents, "neodots", "persistence", "enable")
+            .unwrap_or(false);
 
-    let persistence_path = parse_nested_string_assignment(
-        &contents,
-        "neodots",
-        "persistence",
-        "path",
-    )
-    .unwrap_or_else(|| "/persist".to_string());
+    let persistence_path =
+        parse_nested_string_assignment(&contents, "neodots", "persistence", "path")
+            .unwrap_or_else(|| "/persist".to_string());
 
     Ok(MachineConfig {
         system,
@@ -570,29 +517,20 @@ fn parse_string_assignment(contents: &str, key: &str) -> Option<String> {
             continue;
         }
 
-        return Some(unquote_nix_string(
-            rhs.trim().trim_end_matches(';').trim(),
-        ));
+        return Some(unquote_nix_string(rhs.trim().trim_end_matches(';').trim()));
     }
 
     None
 }
 
-fn parse_block_string_assignment(
-    contents: &str,
-    outer_block: &str,
-    key: &str,
-) -> Option<String> {
+fn parse_block_string_assignment(contents: &str, outer_block: &str, key: &str) -> Option<String> {
     let mut in_outer = false;
     let mut depth = 0usize;
 
     for line in contents.lines() {
         let trimmed = line.trim();
 
-        if !in_outer
-            && trimmed.starts_with(outer_block)
-            && trimmed.contains('{')
-        {
+        if !in_outer && trimmed.starts_with(outer_block) && trimmed.contains('{') {
             in_outer = true;
             depth = 1;
             continue;
@@ -650,10 +588,7 @@ fn parse_nested_assignment(
     for line in contents.lines() {
         let trimmed = line.trim();
 
-        if !in_outer
-            && trimmed.starts_with(outer_block)
-            && trimmed.contains('{')
-        {
+        if !in_outer && trimmed.starts_with(outer_block) && trimmed.contains('{') {
             in_outer = true;
             outer_depth = 1;
             continue;
@@ -663,25 +598,17 @@ fn parse_nested_assignment(
             continue;
         }
 
-        if !in_nested
-            && trimmed.starts_with(nested_block)
-            && trimmed.contains('{')
-        {
+        if !in_nested && trimmed.starts_with(nested_block) && trimmed.contains('{') {
             in_nested = true;
             nested_depth = 1;
             continue;
         }
 
         if in_nested {
-            if let Some((lhs, rhs)) = trimmed.split_once('=') {
-                if lhs.trim() == key {
-                    return Some(
-                        rhs.trim()
-                            .trim_end_matches(';')
-                            .trim()
-                            .to_string(),
-                    );
-                }
+            if let Some((lhs, rhs)) = trimmed.split_once('=')
+                && lhs.trim() == key
+            {
+                return Some(rhs.trim().trim_end_matches(';').trim().to_string());
             }
 
             nested_depth = update_brace_depth(nested_depth, trimmed);
@@ -705,18 +632,13 @@ fn update_brace_depth(current: usize, line: &str) -> usize {
     let opens = line.matches('{').count();
     let closes = line.matches('}').count();
 
-    current
-        .saturating_add(opens)
-        .saturating_sub(closes)
+    current.saturating_add(opens).saturating_sub(closes)
 }
 
 fn unquote_nix_string(value: &str) -> String {
     let value = value.trim();
 
-    if value.len() >= 2
-        && value.starts_with('"')
-        && value.ends_with('"')
-    {
+    if value.len() >= 2 && value.starts_with('"') && value.ends_with('"') {
         value[1..value.len() - 1]
             .replace("\\\"", "\"")
             .replace("\\\\", "\\")
@@ -729,15 +651,9 @@ fn print_machine_summary(target: &TargetRoot, machine: &MachineConfig) {
     let path = target.machine_config();
 
     if path.is_file() {
-        println!(
-            "  Existing machine configuration: {}",
-            path.display()
-        );
+        println!("  Existing machine configuration: {}", path.display());
     } else {
-        println!(
-            "  No existing machine configuration: {}",
-            path.display()
-        );
+        println!("  No existing machine configuration: {}", path.display());
     }
 
     println!();
@@ -758,23 +674,16 @@ fn handle_machine_config(
 
     if hardware == HardwarePreparation::Unavailable {
         return Err(
-            "hardware-configuration.nix is missing and generation was declined"
-                .to_string(),
+            "hardware-configuration.nix is missing and generation was declined".to_string(),
         );
     }
 
-    if !prompt_yes_no(
-        "Validate staged configuration and replace machine.nix? [y/N] ",
-    )? {
+    if !prompt_yes_no("Validate staged configuration and replace machine.nix? [y/N] ")? {
         println!("  Installation skipped.");
         return Ok(());
     }
 
-    validate_and_install_machine_config(
-        target,
-        &generated,
-        hardware,
-    )
+    validate_and_install_machine_config(target, &generated, hardware)
 }
 
 fn render_machine_config(machine: &MachineConfig) -> String {
@@ -826,16 +735,8 @@ fn nix_string(value: &str) -> String {
 fn validate_machine_config(machine: &MachineConfig) -> Result<(), String> {
     validate_username(&machine.username)?;
     validate_hostname(&machine.hostname)?;
-    validate_absolute_path(
-        &machine.home_directory,
-        "homeDirectory",
-        false,
-    )?;
-    validate_absolute_path(
-        &machine.persistence_path,
-        "persistence.path",
-        true,
-    )?;
+    validate_absolute_path(&machine.home_directory, "homeDirectory", false)?;
+    validate_absolute_path(&machine.persistence_path, "persistence.path", true)?;
 
     if machine.system.trim().is_empty() {
         return Err("system must not be empty".to_string());
@@ -862,14 +763,9 @@ fn validate_username(value: &str) -> Result<(), String> {
     let first_valid = bytes[0].is_ascii_lowercase() || bytes[0] == b'_';
 
     if !first_valid
-        || !bytes
-            .iter()
-            .all(|byte| {
-                byte.is_ascii_lowercase()
-                    || byte.is_ascii_digit()
-                    || *byte == b'_'
-                    || *byte == b'-'
-            })
+        || !bytes.iter().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_' || *byte == b'-'
+        })
     {
         return Err(format!("invalid username: {value}"));
     }
@@ -884,26 +780,21 @@ fn validate_hostname(value: &str) -> Result<(), String> {
 
     let bytes = value.as_bytes();
 
-    if !bytes[0].is_ascii_alphanumeric()
-        || !bytes[bytes.len() - 1].is_ascii_alphanumeric()
-    {
+    if !bytes[0].is_ascii_alphanumeric() || !bytes[bytes.len() - 1].is_ascii_alphanumeric() {
         return Err(format!("invalid hostname: {value}"));
     }
 
-    if !bytes.iter().all(|byte| {
-        byte.is_ascii_alphanumeric() || *byte == b'.' || *byte == b'-'
-    }) {
+    if !bytes
+        .iter()
+        .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'.' || *byte == b'-')
+    {
         return Err(format!("invalid hostname: {value}"));
     }
 
     Ok(())
 }
 
-fn validate_absolute_path(
-    value: &str,
-    field: &str,
-    reject_root: bool,
-) -> Result<(), String> {
+fn validate_absolute_path(value: &str, field: &str, reject_root: bool) -> Result<(), String> {
     let path = Path::new(value);
 
     if !path.is_absolute() {
@@ -933,15 +824,11 @@ fn is_nix_safe_string(value: &str) -> bool {
     })
 }
 
-fn validate_staged_configuration(
-    validation_dir: &Path,
-) -> Result<(), String> {
-    let nix_path = find_in_path(NIX_COMMAND)
-        .ok_or_else(|| "nix was not found in PATH".to_string())?;
+fn validate_staged_configuration(validation_dir: &Path) -> Result<(), String> {
+    let nix_path =
+        find_in_path(NIX_COMMAND).ok_or_else(|| "nix was not found in PATH".to_string())?;
 
-    println!(
-        "    Validating staged configuration with nix flake check..."
-    );
+    println!("    Validating staged configuration with nix flake check...");
 
     let status = Command::new(&nix_path)
         .arg("flake")
@@ -950,9 +837,7 @@ fn validate_staged_configuration(
         .arg("--no-write-lock-file")
         .arg(validation_dir)
         .status()
-        .map_err(|error| {
-            format!("failed to run nix flake check: {error}")
-        })?;
+        .map_err(|error| format!("failed to run nix flake check: {error}"))?;
 
     if !status.success() {
         return Err(format!(
@@ -972,8 +857,7 @@ fn validate_and_install_machine_config(
     let privilege_helper = find_privilege_helper()
         .ok_or_else(|| "neither sudo nor doas was found in PATH".to_string())?;
 
-    let validation_dir =
-        create_temp_directory("neodots-installer-validation")?;
+    let validation_dir = create_temp_directory("neodots-installer-validation")?;
 
     let result = (|| {
         println!(
@@ -990,26 +874,19 @@ fn validate_and_install_machine_config(
             )
         })?;
 
-        copy_recursively(
-            &target.nixos_config_dir(),
-            &staged_nixos_dir,
-        )?;
+        copy_recursively(&target.nixos_config_dir(), &staged_nixos_dir)?;
 
         let mut generated_hardware_root = None;
 
         if hardware == HardwarePreparation::GenerateInStaging {
-            let generated_root =
-                create_temp_directory("neodots-installer-hardware")?;
+            let generated_root = create_temp_directory("neodots-installer-hardware")?;
 
             println!(
                 "    Generating hardware configuration in {}...",
                 generated_root.display()
             );
 
-            generate_hardware_configuration_in_staging(
-                &privilege_helper,
-                &generated_root,
-            )?;
+            generate_hardware_configuration_in_staging(&privilege_helper, &generated_root)?;
 
             let generated_hardware = generated_root
                 .join("etc")
@@ -1028,9 +905,7 @@ fn validate_and_install_machine_config(
                 staged_nixos_dir.join(HARDWARE_CONFIG_FILE),
             )
             .map_err(|error| {
-                format!(
-                    "failed to copy generated hardware configuration into staging: {error}"
-                )
+                format!("failed to copy generated hardware configuration into staging: {error}")
             })?;
 
             generated_hardware_root = Some(generated_root);
@@ -1050,21 +925,18 @@ fn validate_and_install_machine_config(
             })?;
         }
 
-        fs::write(&staged_machine_path, machine_contents).map_err(
-            |error| {
-                format!(
-                    "failed to write staged machine.nix {}: {error}",
-                    staged_machine_path.display()
-                )
-            },
-        )?;
+        fs::write(&staged_machine_path, machine_contents).map_err(|error| {
+            format!(
+                "failed to write staged machine.nix {}: {error}",
+                staged_machine_path.display()
+            )
+        })?;
 
         validate_staged_configuration(&validation_dir)?;
 
         println!("    ✓ staged configuration passed validation");
 
-        if hardware == HardwarePreparation::GenerateInStaging
-            && !target.hardware_config().exists()
+        if hardware == HardwarePreparation::GenerateInStaging && !target.hardware_config().exists()
         {
             let generated_hardware = generated_hardware_root
                 .as_ref()
@@ -1082,16 +954,9 @@ fn validate_and_install_machine_config(
             println!("    ✓ generated hardware configuration installed");
         }
 
-        let machine_temp = create_temp_file(
-            "neodots-installer-machine",
-            machine_contents,
-        )?;
+        let machine_temp = create_temp_file("neodots-installer-machine", machine_contents)?;
 
-        install_file_privileged(
-            &privilege_helper,
-            &machine_temp,
-            &target.machine_config(),
-        )?;
+        install_file_privileged(&privilege_helper, &machine_temp, &target.machine_config())?;
 
         fs::remove_file(&machine_temp).ok();
 
@@ -1130,17 +995,9 @@ fn generate_hardware_configuration_in_staging(
     run_privileged_command(
         privilege_helper,
         GENERATE_CONFIG_COMMAND,
-        &[
-            "--root",
-            generated_root_string.as_str(),
-            "--no-filesystems",
-        ],
+        &["--root", generated_root_string.as_str(), "--no-filesystems"],
     )
-    .map_err(|error| {
-        format!(
-            "nixos-generate-config failed in disposable staging: {error}"
-        )
-    })?;
+    .map_err(|error| format!("nixos-generate-config failed in disposable staging: {error}"))?;
 
     Ok(())
 }
@@ -1262,10 +1119,7 @@ fn create_temp_directory(prefix: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn create_temp_file(
-    prefix: &str,
-    contents: &str,
-) -> Result<PathBuf, String> {
+fn create_temp_file(prefix: &str, contents: &str) -> Result<PathBuf, String> {
     let path = env::temp_dir().join(format!(
         "{}-{}-{}",
         prefix,
@@ -1296,24 +1150,13 @@ fn path_to_string(path: &Path) -> Result<String, String> {
         .ok_or_else(|| format!("path is not valid UTF-8: {}", path.display()))
 }
 
-fn copy_recursively(
-    source: &Path,
-    destination: &Path,
-) -> Result<(), String> {
-    let metadata = fs::symlink_metadata(source).map_err(|error| {
-        format!(
-            "failed to inspect {}: {error}",
-            source.display()
-        )
-    })?;
+fn copy_recursively(source: &Path, destination: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(source)
+        .map_err(|error| format!("failed to inspect {}: {error}", source.display()))?;
 
     if metadata.file_type().is_symlink() {
-        let target = fs::read_link(source).map_err(|error| {
-            format!(
-                "failed to read symlink {}: {error}",
-                source.display()
-            )
-        })?;
+        let target = fs::read_link(source)
+            .map_err(|error| format!("failed to read symlink {}: {error}", source.display()))?;
 
         if destination.exists() {
             remove_existing_path(destination)?;
@@ -1338,12 +1181,9 @@ fn copy_recursively(
             )
         })?;
 
-        for entry in fs::read_dir(source).map_err(|error| {
-            format!(
-                "failed to read directory {}: {error}",
-                source.display()
-            )
-        })? {
+        for entry in fs::read_dir(source)
+            .map_err(|error| format!("failed to read directory {}: {error}", source.display()))?
+        {
             let entry = entry.map_err(|error| {
                 format!(
                     "failed to read directory entry in {}: {error}",
@@ -1352,13 +1192,9 @@ fn copy_recursively(
             })?;
 
             let child_source = entry.path();
-            let child_destination =
-                destination.join(entry.file_name());
+            let child_destination = destination.join(entry.file_name());
 
-            copy_recursively(
-                &child_source,
-                &child_destination,
-            )?;
+            copy_recursively(&child_source, &child_destination)?;
         }
 
         return Ok(());
@@ -1392,27 +1228,15 @@ fn copy_recursively(
 }
 
 fn remove_existing_path(path: &Path) -> Result<(), String> {
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
-        format!(
-            "failed to inspect {}: {error}",
-            path.display()
-        )
-    })?;
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
 
     if metadata.file_type().is_symlink() || metadata.is_file() {
-        fs::remove_file(path).map_err(|error| {
-            format!(
-                "failed to remove {}: {error}",
-                path.display()
-            )
-        })?;
+        fs::remove_file(path)
+            .map_err(|error| format!("failed to remove {}: {error}", path.display()))?;
     } else if metadata.is_dir() {
-        fs::remove_dir_all(path).map_err(|error| {
-            format!(
-                "failed to remove {}: {error}",
-                path.display()
-            )
-        })?;
+        fs::remove_dir_all(path)
+            .map_err(|error| format!("failed to remove {}: {error}", path.display()))?;
     }
 
     Ok(())
@@ -1424,49 +1248,29 @@ mod tests {
 
     #[test]
     fn target_root_maps_paths_correctly() {
-        let live =
-            TargetRoot::from_path(PathBuf::from("/")).unwrap();
+        let live = TargetRoot::from_path(PathBuf::from("/")).unwrap();
 
-        assert_eq!(
-            live.os_release_path(),
-            PathBuf::from("/etc/os-release")
-        );
-        assert_eq!(
-            live.passwd_path(),
-            PathBuf::from("/etc/passwd")
-        );
-        assert_eq!(
-            live.nixos_config_dir(),
-            PathBuf::from("/etc/nixos")
-        );
+        assert_eq!(live.os_release_path(), PathBuf::from("/etc/os-release"));
+        assert_eq!(live.passwd_path(), PathBuf::from("/etc/passwd"));
+        assert_eq!(live.nixos_config_dir(), PathBuf::from("/etc/nixos"));
         assert_eq!(
             live.machine_config(),
             PathBuf::from("/etc/nixos/hosts/nixos/machine.nix")
         );
 
-        let mounted =
-            TargetRoot::from_path(PathBuf::from("/mnt"))
-                .unwrap_or_else(|_| TargetRoot {
-                    root: PathBuf::from("/mnt"),
-                });
+        let mounted = TargetRoot::from_path(PathBuf::from("/mnt")).unwrap_or_else(|_| TargetRoot {
+            root: PathBuf::from("/mnt"),
+        });
 
         assert_eq!(
             mounted.os_release_path(),
             PathBuf::from("/mnt/etc/os-release")
         );
-        assert_eq!(
-            mounted.passwd_path(),
-            PathBuf::from("/mnt/etc/passwd")
-        );
-        assert_eq!(
-            mounted.nixos_config_dir(),
-            PathBuf::from("/mnt/etc/nixos")
-        );
+        assert_eq!(mounted.passwd_path(), PathBuf::from("/mnt/etc/passwd"));
+        assert_eq!(mounted.nixos_config_dir(), PathBuf::from("/mnt/etc/nixos"));
         assert_eq!(
             mounted.machine_config(),
-            PathBuf::from(
-                "/mnt/etc/nixos/hosts/nixos/machine.nix"
-            )
+            PathBuf::from("/mnt/etc/nixos/hosts/nixos/machine.nix")
         );
     }
 
@@ -1484,24 +1288,14 @@ mod tests {
 
         let rendered = render_machine_config(&machine);
 
-        assert!(rendered.contains(
-            r#"system = "x86_64-linux";"#
-        ));
-        assert!(rendered.contains(
-            r#"username = "kay";"#
-        ));
-        assert!(rendered.contains(
-            r#"hostname = "nixos";"#
-        ));
-        assert!(rendered.contains(
-            r#"homeDirectory = "/home/kay";"#
-        ));
+        assert!(rendered.contains(r#"system = "x86_64-linux";"#));
+        assert!(rendered.contains(r#"username = "kay";"#));
+        assert!(rendered.contains(r#"hostname = "nixos";"#));
+        assert!(rendered.contains(r#"homeDirectory = "/home/kay";"#));
         assert!(rendered.contains("personal = {"));
         assert!(rendered.contains("enable = true;"));
         assert!(rendered.contains("persistence = {"));
-        assert!(rendered.contains(
-            r#"path = "/persist";"#
-        ));
+        assert!(rendered.contains(r#"path = "/persist";"#));
     }
 
     #[test]
@@ -1527,15 +1321,11 @@ mod tests {
 }
 "#;
 
-        let path = env::temp_dir().join(format!(
-            "neodots-installer-test-{}",
-            timestamp_nanos()
-        ));
+        let path = env::temp_dir().join(format!("neodots-installer-test-{}", timestamp_nanos()));
 
         fs::write(&path, contents).unwrap();
 
-        let config =
-            read_existing_machine_config(&path).unwrap();
+        let config = read_existing_machine_config(&path).unwrap();
 
         assert!(config.personal_enable);
         assert!(config.persistence_enable);
@@ -1562,38 +1352,10 @@ mod tests {
 
     #[test]
     fn persistence_path_must_be_absolute_and_non_root() {
-        assert!(
-            validate_absolute_path(
-                "/persist",
-                "persistence.path",
-                true
-            )
-            .is_ok()
-        );
-        assert!(
-            validate_absolute_path(
-                "/data/persist",
-                "persistence.path",
-                true
-            )
-            .is_ok()
-        );
-        assert!(
-            validate_absolute_path(
-                "persist",
-                "persistence.path",
-                true
-            )
-            .is_err()
-        );
-        assert!(
-            validate_absolute_path(
-                "/",
-                "persistence.path",
-                true
-            )
-            .is_err()
-        );
+        assert!(validate_absolute_path("/persist", "persistence.path", true).is_ok());
+        assert!(validate_absolute_path("/data/persist", "persistence.path", true).is_ok());
+        assert!(validate_absolute_path("persist", "persistence.path", true).is_err());
+        assert!(validate_absolute_path("/", "persistence.path", true).is_err());
     }
 
     #[test]
@@ -1601,9 +1363,6 @@ mod tests {
         let value = "path\\with\"quotes\n";
         let escaped = nix_string(value);
 
-        assert_eq!(
-            escaped,
-            "path\\\\with\\\"quotes\\n"
-        );
+        assert_eq!(escaped, "path\\\\with\\\"quotes\\n");
     }
 }
