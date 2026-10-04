@@ -46,8 +46,16 @@ pub fn find_in_path(command: &str) -> Option<PathBuf> {
         }
 
         let candidate = directory.join(command);
-        let canonical = fs::canonicalize(&candidate).ok()?;
-        let metadata = fs::metadata(&canonical).ok()?;
+
+        let canonical = match fs::canonicalize(&candidate) {
+            Ok(path) => path,
+            Err(_) => continue,
+        };
+
+        let metadata = match fs::metadata(&canonical) {
+            Ok(metadata) => metadata,
+            Err(_) => continue,
+        };
 
         if !metadata.is_file() || !is_executable(&metadata) {
             continue;

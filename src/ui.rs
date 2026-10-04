@@ -9,6 +9,7 @@ use crate::config::{
     validate_hostname, validate_username_for_target,
 };
 use crate::target::TargetRoot;
+use crate::wallpaper::{WallpaperSelection, validate_wallpaper_id};
 
 pub fn prompt_yes_no(prompt: &str) -> Result<bool, String> {
     prompt_yes_no_default(prompt, false)
@@ -140,6 +141,42 @@ pub fn select_machine_config(
     }
 
     Ok(selected)
+}
+
+pub fn select_wallpaper() -> Result<WallpaperSelection, String> {
+    println!();
+    println!("[wallpaper]");
+    println!("  n = none");
+    println!("  r = random");
+    println!("  s = specific wallpaper ID");
+
+    loop {
+        print!("  Wallpaper selection [n/r/s]: ");
+
+        io::stdout()
+            .flush()
+            .map_err(|error| format!("failed to flush stdout: {error}"))?;
+
+        let mut input = String::new();
+
+        io::stdin()
+            .read_line(&mut input)
+            .map_err(|error| format!("failed to read input: {error}"))?;
+
+        match input.trim().to_ascii_lowercase().as_str() {
+            "" | "n" | "none" => return Ok(WallpaperSelection::None),
+
+            "r" | "random" => return Ok(WallpaperSelection::Random),
+
+            "s" | "specific" => {
+                let id = prompt_text("wallpaper ID", "", validate_wallpaper_id)?;
+
+                return Ok(WallpaperSelection::Specific(id));
+            }
+
+            _ => println!("    ! enter n/none, r/random, or s/specific"),
+        }
+    }
 }
 
 pub fn print_machine_summary(target: &TargetRoot, machine: &MachineConfig) {

@@ -9,6 +9,7 @@ mod staging;
 mod target;
 mod transaction;
 mod ui;
+mod wallpaper;
 
 use std::{fs, path::Path, process::ExitCode};
 
@@ -24,7 +25,11 @@ use privilege::check_privilege_helper;
 use staging::validate_and_install_machine_config;
 use target::{TargetRoot, acquire_installer_lock};
 use transaction::recover_pending_transactions;
-use ui::{print_machine_summary, prompt_yes_no, select_machine_config};
+use ui::{print_machine_summary, prompt_yes_no, select_machine_config, select_wallpaper};
+use wallpaper::{
+    WallpaperAsset, install_selected_wallpaper, print_wallpaper_summary,
+    resolve_wallpaper_selection, rollback_wallpaper_install,
+};
 
 fn main() -> ExitCode {
     println!("Neodots installer");
@@ -134,17 +139,31 @@ arbitrary declarations outside that contract."
 
     print_machine_summary(&target, &selected);
 
+    let wallpaper_selection = match select_wallpaper() {
+        Ok(selection) => selection,
+        Err(error) => return fail(error),
+    };
+
+    let selected_wallpaper = match resolve_wallpaper_selection(&wallpaper_selection) {
+        Ok(asset) => asset,
+        Err(error) => return fail(error),
+    };
+
+    print_wallpaper_summary(selected_wallpaper.as_ref());
+
     match handle_machine_config(
         &target,
         &selected,
         &machine_contents,
         hardware,
+        selected_wallpaper.as_ref(),
         &privilege_helper,
     ) {
         Ok(()) => {
             println!();
             println!(
-                "Installation completed successfully; the installed configuration was verified."
+                "Installation completed successfully; the installed configuration \
+and selected wallpaper were verified."
             );
             ExitCode::SUCCESS
         }
@@ -180,6 +199,7 @@ fn handle_machine_config(
     machine: &MachineConfig,
     machine_contents: &str,
     hardware: HardwarePreparation,
+    wallpaper: Option<&WallpaperAsset>,
     privilege_helper: &Path,
 ) -> Result<(), String> {
     validate_machine_config(machine)?;
@@ -192,19 +212,41 @@ fn handle_machine_config(
     }
 
     if !prompt_yes_no(
-        "Validate staged configuration and transactionally install the selected configuration?",
+        "Validate staged configuration, install the selected configuration, and apply the selected wallpaper?",
     )? {
         println!("  Installation skipped.");
         return Ok(());
     }
 
-    validate_and_install_machine_config(
+    let wallpaper_receipt = match wallpaper {
+        Some(asset) => Some(
+            install_selected_wallpaper(target, machine, asset)
+                .map_err(|error| format!("wallpaper preparation failed: {error}"))?,
+        ),
+        None => None,
+    };
+
+    let install_result = validate_and_install_machine_config(
         target,
         machine,
         machine_contents,
         hardware,
         privilege_helper,
-    )
+    );
+
+    if let Err(error) = install_result {
+        if let Some(receipt) = &wallpaper_receipt
+            && let Err(rollback_error) = rollback_wallpaper_install(receipt)
+        {
+            return Err(format!(
+                "configuration installation failed: {error}; wallpaper rollback also failed: {rollback_error}"
+            ));
+        }
+
+        return Err(error);
+    }
+
+    Ok(())
 }
 
 fn fail(error: String) -> ExitCode {
