@@ -4,7 +4,10 @@
 
 use std::{env, fs, path::Path, process::Command};
 
-use crate::{privilege::find_in_path, target::TargetRoot};
+use crate::{
+    privilege::{find_in_path, run_privileged_command_output},
+    target::TargetRoot,
+};
 
 pub const NEODOTS_REPOSITORY_URL: &str = "https://github.com/kaayzouee/neodots.git";
 pub const NEODOTS_PINNED_REVISION: &str = "4720666cfa0ae1ea4cd1bad66b74ede1c912ec02";
@@ -18,6 +21,23 @@ pub struct MachineConfig {
     pub personal_enable: bool,
     pub persistence_enable: bool,
     pub persistence_path: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PasswordState {
+    PasswordProtected,
+    Passwordless,
+    Locked,
+}
+
+impl PasswordState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PasswordProtected => "PasswordProtected",
+            Self::Passwordless => "Passwordless",
+            Self::Locked => "Locked",
+        }
+    }
 }
 
 pub fn verify_neodots_revision(target: &TargetRoot) -> Result<(), String> {
@@ -298,6 +318,85 @@ fn lookup_home_directory(target: &TargetRoot, username: &str) -> Result<String, 
     }
 
     Ok(home_directory_for_username(username))
+}
+
+pub fn detect_password_state(
+    target: &TargetRoot,
+    username: &str,
+    privilege_helper: &Path,
+) -> Result<PasswordState, String> {
+    let shadow_path = target.shadow_path();
+    let shadow_path_string = shadow_path.to_str().ok_or_else(|| {
+        format!(
+            "target shadow path is not valid UTF-8: {}",
+            shadow_path.display()
+        )
+    })?;
+
+    let contents =
+        run_privileged_command_output(privilege_helper, "cat", &["--", shadow_path_string])?;
+
+    parse_password_state(&contents, username)
+}
+
+fn parse_password_state(shadow_contents: &str, username: &str) -> Result<PasswordState, String> {
+    let mut state = None;
+
+    for line in shadow_contents.lines() {
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let fields: Vec<&str> = line.split(':').collect();
+
+        if fields.first().copied() != Some(username) {
+            continue;
+        }
+
+        if state.is_some() {
+            return Err(format!(
+                "target /etc/shadow contains multiple entries for primary user {username}"
+            ));
+        }
+
+        if fields.len() < 2 {
+            return Err(format!(
+                "target /etc/shadow entry for primary user {username} is malformed"
+            ));
+        }
+
+        let password_field = fields[1];
+
+        let password_state = if password_field.is_empty() {
+            PasswordState::Passwordless
+        } else if password_field == "*" || password_field.starts_with('!') {
+            PasswordState::Locked
+        } else {
+            PasswordState::PasswordProtected
+        };
+
+        state = Some(password_state);
+    }
+
+    state.ok_or_else(|| {
+        format!(
+            "target /etc/shadow has no entry for primary user {username}; password state cannot be safely established"
+        )
+    })
+}
+
+pub fn validate_primary_password_state(state: PasswordState) -> Result<(), String> {
+    match state {
+        PasswordState::PasswordProtected => Ok(()),
+        PasswordState::Passwordless => Err(
+            "primary interactive user is passwordless; a usable password is required before installation"
+                .to_string(),
+        ),
+        PasswordState::Locked => Err(
+            "primary interactive user password is locked; unlock or provision a usable password before installation"
+                .to_string(),
+        ),
+    }
 }
 
 fn detect_hostname(target: &TargetRoot) -> Result<String, String> {
@@ -868,6 +967,85 @@ mod tests {
         assert!(validate_username_for_target(&target, "alice").is_ok());
 
         fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn password_protected_state_is_detected() {
+        let shadow = "root:!:1:0:99999:7:::\nkay:$6$example$hash:1:0:99999:7:::\n";
+
+        assert_eq!(
+            parse_password_state(shadow, "kay").unwrap(),
+            PasswordState::PasswordProtected
+        );
+    }
+
+    #[test]
+    fn passwordless_state_is_detected() {
+        let shadow = "kay::1:0:99999:7:::\n";
+
+        assert_eq!(
+            parse_password_state(shadow, "kay").unwrap(),
+            PasswordState::Passwordless
+        );
+    }
+
+    #[test]
+    fn locked_state_is_detected() {
+        let locked_with_bang = "kay:!!:1:0:99999:7:::\n";
+        let locked_with_star = "kay:*:1:0:99999:7:::\n";
+
+        assert_eq!(
+            parse_password_state(locked_with_bang, "kay").unwrap(),
+            PasswordState::Locked
+        );
+        assert_eq!(
+            parse_password_state(locked_with_star, "kay").unwrap(),
+            PasswordState::Locked
+        );
+    }
+
+    #[test]
+    fn missing_password_entry_is_rejected() {
+        let shadow = "root:!:1:0:99999:7:::\n";
+
+        let error = parse_password_state(shadow, "kay").unwrap_err();
+
+        assert!(error.contains("no entry for primary user kay"));
+    }
+
+    #[test]
+    fn malformed_password_entry_is_rejected() {
+        let shadow = "kay\n";
+
+        let error = parse_password_state(shadow, "kay").unwrap_err();
+
+        assert!(error.contains("malformed"));
+    }
+
+    #[test]
+    fn duplicate_password_entries_are_rejected() {
+        let shadow = "kay:$6$one$hash:1:0:99999:7:::\nkay:$6$two$hash:1:0:99999:7:::\n";
+
+        let error = parse_password_state(shadow, "kay").unwrap_err();
+
+        assert!(error.contains("multiple entries"));
+    }
+
+    #[test]
+    fn unsafe_password_states_are_rejected() {
+        assert!(validate_primary_password_state(PasswordState::PasswordProtected).is_ok());
+        assert!(validate_primary_password_state(PasswordState::Passwordless).is_err());
+        assert!(validate_primary_password_state(PasswordState::Locked).is_err());
+    }
+
+    #[test]
+    fn password_state_labels_are_stable() {
+        assert_eq!(
+            PasswordState::PasswordProtected.as_str(),
+            "PasswordProtected"
+        );
+        assert_eq!(PasswordState::Passwordless.as_str(), "Passwordless");
+        assert_eq!(PasswordState::Locked.as_str(), "Locked");
     }
 
     #[test]

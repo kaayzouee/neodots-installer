@@ -132,6 +132,36 @@ pub fn run_privileged_command(
     Ok(())
 }
 
+pub fn run_privileged_command_output(
+    privilege_helper: &Path,
+    command: &str,
+    args: &[&str],
+) -> Result<String, String> {
+    let output = Command::new(privilege_helper)
+        .arg(command)
+        .args(args)
+        .output()
+        .map_err(|error| {
+            format!(
+                "failed to run {} {}: {error}",
+                privilege_helper.display(),
+                command
+            )
+        })?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "{} {} exited with status {}",
+            privilege_helper.display(),
+            command,
+            output.status
+        ));
+    }
+
+    String::from_utf8(output.stdout)
+        .map_err(|error| format!("privileged command returned invalid UTF-8: {error}"))
+}
+
 pub fn create_temp_directory(prefix: &str) -> Result<PathBuf, String> {
     let temp_root = env::temp_dir();
 

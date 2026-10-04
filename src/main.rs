@@ -13,8 +13,9 @@ mod ui;
 use std::{fs, path::Path, process::ExitCode};
 
 use config::{
-    MachineConfig, detect_machine_config, render_machine_config, validate_machine_config,
-    validate_username_for_target, verify_neodots_revision,
+    MachineConfig, detect_machine_config, detect_password_state, render_machine_config,
+    validate_machine_config, validate_primary_password_state, validate_username_for_target,
+    verify_neodots_revision,
 };
 use preflight::{
     HardwarePreparation, check_git, check_hardware_configuration, check_nix, check_nixos,
@@ -89,6 +90,21 @@ fn main() -> ExitCode {
         Ok(config) => config,
         Err(error) => return fail(error),
     };
+
+    let password_state = match detect_password_state(&target, &selected.username, &privilege_helper)
+    {
+        Ok(state) => state,
+        Err(error) => return fail(error),
+    };
+
+    println!();
+    println!("[password]");
+    println!("  ✓ primary user: {}", selected.username);
+    println!("  ✓ password state: {}", password_state.as_str());
+
+    if let Err(error) = validate_primary_password_state(password_state) {
+        return fail(error);
+    }
 
     let replacing_existing_machine =
         existing_machine_contents.is_some() && machine_config_changed(&detected, &selected);

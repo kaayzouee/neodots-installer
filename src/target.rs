@@ -79,6 +79,10 @@ impl TargetRoot {
         self.path("/etc/passwd")
     }
 
+    pub fn shadow_path(&self) -> PathBuf {
+        self.path("/etc/shadow")
+    }
+
     pub fn hostname_path(&self) -> PathBuf {
         self.path("/etc/hostname")
     }
@@ -184,6 +188,7 @@ mod tests {
 
         assert_eq!(live.os_release_path(), PathBuf::from("/etc/os-release"));
         assert_eq!(live.passwd_path(), PathBuf::from("/etc/passwd"));
+        assert_eq!(live.shadow_path(), PathBuf::from("/etc/shadow"));
         assert_eq!(live.hostname_path(), PathBuf::from("/etc/hostname"));
         assert_eq!(live.nixos_config_dir(), PathBuf::from("/etc/nixos"));
         assert_eq!(
@@ -200,6 +205,7 @@ mod tests {
             PathBuf::from("/mnt/etc/os-release")
         );
         assert_eq!(mounted.passwd_path(), PathBuf::from("/mnt/etc/passwd"));
+        assert_eq!(mounted.shadow_path(), PathBuf::from("/mnt/etc/shadow"));
         assert_eq!(mounted.hostname_path(), PathBuf::from("/mnt/etc/hostname"));
         assert_eq!(mounted.nixos_config_dir(), PathBuf::from("/mnt/etc/nixos"));
         assert_eq!(

@@ -749,7 +749,7 @@ fn install_file_privileged(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs, os::unix::fs::PermissionsExt};
+    use std::os::unix::fs::PermissionsExt;
 
     const HARDWARE_CONFIG_FILE: &str = "hardware-configuration.nix";
 
@@ -773,13 +773,8 @@ mod tests {
     }
 
     fn fake_privilege_helper() -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "neodots-installer-test-helper-{}-{}",
-            std::process::id(),
-            timestamp_nanos()
-        ));
-
-        fs::write(&path, "#!/bin/sh\nexec \"$@\"\n").unwrap();
+        let path =
+            create_temp_file("neodots-installer-test-helper", "#!/bin/sh\nexec \"$@\"\n").unwrap();
 
         let mut permissions = fs::metadata(&path).unwrap().permissions();
         permissions.set_mode(0o755);
