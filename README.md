@@ -4,35 +4,51 @@
 
 # neodots-installer
 
-A small Rust preflight scanner for the Neodots NixOS installer.
+A Rust installer/preflight tool for the Neodots NixOS configuration.
 
-## Current checks
+## Current flow
 
-- `/etc/nixos/hardware-configuration.nix`
-- `git` in `PATH`
-- `sudo` or `doas` in `PATH`
+The installer operates on the target NixOS tree instead of cloning the
+Neodots repository into a disposable checkout.
 
-After those checks pass, the scanner asks for permission to clone
-[`kaayzouee/neodots`](https://github.com/kaayzouee/neodots) into a temporary
-directory. It copies the local hardware configuration into that checkout and
-runs `nix flake check --no-build`. The checkout is removed afterwards; the
-scanner does not modify `/etc/nixos` or apply the configuration.
+1. Verify that the target is NixOS.
+2. Acquire the installer lock and recover interrupted transactions.
+3. Check for `hardware-configuration.nix`, `git`, `nix`, and a privilege helper (`sudo` or `doas`).
+4. Detect the machine architecture, username, hostname, home directory, and existing Neodots settings.
+5. Let the operator select the username, hostname, personal configuration, and persistence settings. Press Enter to keep detected values.
+6. Stage the full `/etc/nixos` tree, optionally generate hardware configuration in disposable staging, and render the selected `machine.nix`.
+7. Run `nix flake check --no-build --no-write-lock-file` against the staged `/etc/nixos` tree.
+8. Transactionally install `machine.nix` and any newly generated hardware configuration, with recovery data stored outside `/etc/nixos`.
 
-When the hardware configuration is missing, the scanner prints the command that can generate it and asks whether it should run it.
-
-## Build
-
-```bash
-cargo build --release
-```
-
-## Run
-
-```bash
-cargo run --release
-```
-
-The scanner is intentionally dependency-free at this stage. The TUI can be layered on top of these checks later without changing the detection logic.
-
-The machine-aware installer roadmap is tracked in
+The installer does not run `nixos-rebuild switch` yet, and it does not yet provide
+wallpaper selection or full persistence mount validation. Those remain part of the
+machine-aware installer roadmap in
 [Neodots issue #2](https://github.com/kaayzouee/neodots/issues/2).
+
+## Target overrides
+
+For an installed system, the installer defaults to `/` as the target root.
+For staging or tests, set:
+
+```bash
+NEODOTS_NIXOS_ROOT=/mnt
+NEODOTS_TARGET_USER=myuser
+```
+When selecting a different username, the installer derives the home directory as
+/home/<username> unless the existing home directory is preserved by keeping the
+detected username.
+
+### Build
+
+`cargo build --release`
+
+### Test
+
+`cargo test --locked`
+
+### Run
+
+`cargo run --release`
+
+The code is split into focused modules for configuration, preflight checks, target
+handling, staging, transactional installation, privilege helpers, and terminal input.
