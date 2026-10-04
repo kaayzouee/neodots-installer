@@ -4,7 +4,10 @@
 
 use std::{env, fs, path::Path, process::Command};
 
-use crate::target::TargetRoot;
+use crate::{privilege::find_in_path, target::TargetRoot};
+
+pub const NEODOTS_REPOSITORY_URL: &str = "https://github.com/kaayzouee/neodots.git";
+pub const NEODOTS_PINNED_REVISION: &str = "4720666cfa0ae1ea4cd1bad66b74ede1c912ec02";
 
 #[derive(Debug, Clone)]
 pub struct MachineConfig {
@@ -15,6 +18,120 @@ pub struct MachineConfig {
     pub personal_enable: bool,
     pub persistence_enable: bool,
     pub persistence_path: String,
+}
+
+pub fn verify_neodots_revision(target: &TargetRoot) -> Result<(), String> {
+    let git_path = find_in_path("git")
+        .ok_or_else(|| "git was not found as an executable in PATH".to_string())?;
+
+    let nixos_config_dir = target.nixos_config_dir();
+
+    if !nixos_config_dir.is_dir() {
+        return Err(format!(
+            "Neodots configuration directory does not exist: {}",
+            nixos_config_dir.display()
+        ));
+    }
+
+    let expected_root = fs::canonicalize(&nixos_config_dir).map_err(|error| {
+        format!(
+            "failed to resolve the Neodots configuration directory {}: {error}",
+            nixos_config_dir.display()
+        )
+    })?;
+
+    let repository_root = run_git_output(
+        &git_path,
+        &nixos_config_dir,
+        &["rev-parse", "--show-toplevel"],
+    )?;
+
+    let repository_root = Path::new(repository_root.trim());
+
+    if repository_root != expected_root {
+        return Err(format!(
+            "target NixOS configuration is not the Neodots repository root: expected {}, got {}",
+            expected_root.display(),
+            repository_root.display()
+        ));
+    }
+
+    let revision = run_git_output(
+        &git_path,
+        &nixos_config_dir,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+    )?;
+
+    validate_pinned_neodots_revision(revision.trim())?;
+
+    println!("[neodots]");
+    println!("  ✓ repository: {}", NEODOTS_REPOSITORY_URL);
+    println!("  ✓ pinned revision: {}", revision.trim());
+
+    Ok(())
+}
+
+fn run_git_output(
+    git_path: &Path,
+    working_directory: &Path,
+    args: &[&str],
+) -> Result<String, String> {
+    let output = Command::new(git_path)
+        .arg("-C")
+        .arg(working_directory)
+        .args(args)
+        .output()
+        .map_err(|error| {
+            format!(
+                "failed to run {} in {}: {error}",
+                git_path.display(),
+                working_directory.display()
+            )
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+        if stderr.is_empty() {
+            return Err(format!(
+                "{} in {} exited with status {}",
+                git_path.display(),
+                working_directory.display(),
+                output.status
+            ));
+        }
+
+        return Err(format!(
+            "{} in {} failed with status {}: {}",
+            git_path.display(),
+            working_directory.display(),
+            output.status,
+            stderr
+        ));
+    }
+
+    String::from_utf8(output.stdout).map_err(|error| format!("git returned invalid UTF-8: {error}"))
+}
+
+fn validate_pinned_neodots_revision(revision: &str) -> Result<(), String> {
+    if revision.len() != 40
+        || !revision
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err(format!(
+            "Neodots HEAD is not a valid commit revision: {revision}"
+        ));
+    }
+
+    if revision != NEODOTS_PINNED_REVISION {
+        return Err(format!(
+            "unsupported Neodots revision: expected {}, found {}",
+            NEODOTS_PINNED_REVISION, revision
+        ));
+    }
+
+    Ok(())
 }
 
 pub fn detect_machine_config(target: &TargetRoot) -> Result<MachineConfig, String> {
@@ -161,6 +278,7 @@ fn lookup_home_directory(target: &TargetRoot, username: &str) -> Result<String, 
         }
 
         let fields: Vec<&str> = line.split(':').collect();
+
         if fields.len() < 6 {
             continue;
         }
@@ -750,6 +868,22 @@ mod tests {
         assert!(validate_username_for_target(&target, "alice").is_ok());
 
         fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn pinned_neodots_revision_is_a_full_commit_sha() {
+        assert_eq!(NEODOTS_PINNED_REVISION.len(), 40);
+        assert!(
+            NEODOTS_PINNED_REVISION
+                .chars()
+                .all(|character| character.is_ascii_hexdigit())
+        );
+    }
+
+    #[test]
+    fn unsupported_neodots_revision_is_rejected() {
+        assert!(validate_pinned_neodots_revision(&"0".repeat(40)).is_err());
+        assert!(validate_pinned_neodots_revision(NEODOTS_PINNED_REVISION).is_ok());
     }
 
     #[test]

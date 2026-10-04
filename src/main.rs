@@ -14,7 +14,7 @@ use std::{fs, path::Path, process::ExitCode};
 
 use config::{
     MachineConfig, detect_machine_config, render_machine_config, validate_machine_config,
-    validate_username_for_target,
+    validate_username_for_target, verify_neodots_revision,
 };
 use preflight::{
     HardwarePreparation, check_git, check_hardware_configuration, check_nix, check_nixos,
@@ -64,6 +64,10 @@ fn main() -> ExitCode {
     };
 
     if let Err(error) = check_git() {
+        return fail(error);
+    }
+
+    if let Err(error) = verify_neodots_revision(&target) {
         return fail(error);
     }
 
@@ -123,7 +127,9 @@ arbitrary declarations outside that contract."
     ) {
         Ok(()) => {
             println!();
-            println!("Installer preflight completed.");
+            println!(
+                "Installation completed successfully; the installed configuration was verified."
+            );
             ExitCode::SUCCESS
         }
         Err(error) => fail(error),

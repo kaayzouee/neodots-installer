@@ -52,3 +52,8 @@ detected username.
 
 The code is split into focused modules for configuration, preflight checks, target
 handling, staging, transactional installation, privilege helpers, and terminal input.
+
+
+### Why #11 does not need a transaction rewrite
+
+`src/transaction.rs` already calls `verify_completed_transaction(...)` after the atomic installation and **before** the transaction directory is cleaned up. That function compares the installed `machine.nix` and, when applicable, the generated hardware configuration against the transaction's expected contents. So the actual invariant for #11 is already present; the change above makes the success message and documentation accurately reflect it.
