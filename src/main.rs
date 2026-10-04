@@ -2,194 +2,291 @@
 // Copyright (C) 2026 kaayzouee
 // Author: https://github.com/kaayzouee
 
-use std::env;
-use std::fs;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+mod config;
+mod preflight;
+mod privilege;
+mod staging;
+mod target;
+mod transaction;
+mod tui;
+mod ui;
+mod wallpaper;
 
-const NIXOS_CONFIG_DIR: &str = "/etc/nixos";
-const HARDWARE_CONFIG: &str = "/etc/nixos/hardware-configuration.nix";
-const GENERATE_CONFIG_COMMAND: &str = "nixos-generate-config";
+use std::{fs, path::Path, process::ExitCode};
 
-#[derive(Debug, Clone, Copy)]
-enum CheckStatus {
-    Ok,
-    Warning,
-}
+use config::{
+    MachineConfig, detect_machine_config, detect_password_state, render_machine_config,
+    validate_machine_config, validate_primary_password_state, validate_username_for_target,
+    verify_neodots_revision,
+};
+use preflight::{
+    HardwarePreparation, check_git, check_hardware_configuration, check_nix, check_nixos,
+};
+use privilege::check_privilege_helper;
+use staging::validate_and_install_machine_config;
+use target::{TargetRoot, acquire_installer_lock};
+use transaction::recover_pending_transactions;
+use ui::{
+    print_machine_summary, prompt_yes_no, run_with_progress, select_machine_config,
+    select_wallpaper, show_done_screen, show_error_screen, show_password_state,
+};
+use wallpaper::{
+    WallpaperAsset, install_selected_wallpaper, resolve_wallpaper_selection,
+    rollback_wallpaper_install,
+};
 
 fn main() -> ExitCode {
-    println!("Neodots installer preflight scanner\n");
-
-    let mut status = CheckStatus::Ok;
-
-    status = merge_status(status, check_hardware_configuration());
-    status = merge_status(status, check_git());
-    status = merge_status(status, check_privilege_helper());
-
+    println!("Neodots installer");
     println!();
-    match status {
-        CheckStatus::Ok => {
-            println!("All preflight checks passed.");
-            ExitCode::SUCCESS
-        }
-        CheckStatus::Warning => {
-            println!("Preflight completed with warnings.");
-            ExitCode::from(1)
-        }
-    }
-}
 
-fn merge_status(current: CheckStatus, next: CheckStatus) -> CheckStatus {
-    match (current, next) {
-        (CheckStatus::Warning, _) | (_, CheckStatus::Warning) => CheckStatus::Warning,
-        _ => CheckStatus::Ok,
-    }
-}
-
-fn check_hardware_configuration() -> CheckStatus {
-    println!("[hardware]");
-
-    if !Path::new(NIXOS_CONFIG_DIR).is_dir() {
-        println!("  ! missing NixOS configuration directory: {NIXOS_CONFIG_DIR}");
-        println!("  This installer must be run on a NixOS system with /etc/nixos available.");
-        return CheckStatus::Warning;
-    }
-
-    if Path::new(HARDWARE_CONFIG).is_file() {
-        println!("  ✓ found: {HARDWARE_CONFIG}");
-        return CheckStatus::Ok;
-    }
-
-    println!("  ! missing: {HARDWARE_CONFIG}");
-    println!("  NixOS can generate the machine-specific hardware configuration.");
-
-    let privilege = find_privilege_helper();
-    let command = match privilege.as_deref() {
-        Some(tool) => format!("{} {GENERATE_CONFIG_COMMAND}", tool.display()),
-        None => GENERATE_CONFIG_COMMAND.to_string(),
+    let target = match TargetRoot::from_environment() {
+        Ok(target) => target,
+        Err(error) => return fail(error),
     };
 
-    println!("  Command: {command}");
+    println!("[target]");
+    println!("  ✓ root: {}", target.root().display());
 
-    match prompt_yes_no("  Generate it now? [y/N] ") {
-        Ok(true) => match run_generate_config(privilege.as_deref()) {
+    if let Err(error) = check_nixos(&target) {
+        return fail(error);
+    }
+
+    println!("[nixos]");
+    println!("  ✓ target identifies itself as NixOS");
+
+    let privilege_helper = match check_privilege_helper() {
+        Ok(path) => path,
+        Err(error) => return fail(error),
+    };
+
+    let _installer_lock = match acquire_installer_lock(&target, &privilege_helper) {
+        Ok(lock) => lock,
+        Err(error) => return fail(error),
+    };
+
+    if let Err(error) = recover_pending_transactions(&target, &privilege_helper) {
+        return fail(error);
+    }
+
+    let hardware = match check_hardware_configuration(&target) {
+        Ok(result) => result,
+        Err(error) => return fail(error),
+    };
+
+    if let Err(error) = check_git() {
+        return fail(error);
+    }
+
+    if let Err(error) = verify_neodots_revision(&target) {
+        return fail(error);
+    }
+
+    if let Err(error) = check_nix() {
+        return fail(error);
+    }
+
+    let existing_machine_contents = match read_existing_machine_contents(&target) {
+        Ok(contents) => contents,
+        Err(error) => return fail(error),
+    };
+
+    let detected = match detect_machine_config(&target) {
+        Ok(config) => config,
+        Err(error) => return fail(error),
+    };
+
+    let selected = match select_machine_config(&target, &detected) {
+        Ok(config) => config,
+        Err(error) => return fail(error),
+    };
+
+    let password_state = match detect_password_state(&target, &selected.username, &privilege_helper)
+    {
+        Ok(state) => state,
+        Err(error) => return fail(error),
+    };
+
+    if let Err(error) = show_password_state(password_state) {
+        return fail(error);
+    }
+
+    if let Err(error) = validate_primary_password_state(password_state) {
+        return fail(error);
+    }
+
+    let replacing_existing_machine =
+        existing_machine_contents.is_some() && machine_config_changed(&detected, &selected);
+
+    if replacing_existing_machine {
+        println!();
+        println!("  ! Existing machine.nix will be replaced.");
+        println!(
+            "  ! The installer only models its machine contract and cannot preserve \
+arbitrary declarations outside that contract."
+        );
+        println!("  ! The replacement is intentional only after this separate confirmation.");
+
+        match prompt_yes_no("Replace the existing machine.nix?") {
+            Ok(true) => {}
+            Ok(false) => {
+                return fail("existing machine.nix replacement cancelled".to_string());
+            }
+            Err(error) => return fail(error),
+        }
+    }
+
+    let machine_contents = match existing_machine_contents.as_deref() {
+        Some(existing) if !replacing_existing_machine => existing.to_string(),
+        _ => render_machine_config(&selected),
+    };
+
+    let wallpaper_selection = match select_wallpaper() {
+        Ok(selection) => selection,
+        Err(error) => return fail(error),
+    };
+
+    let selected_wallpaper = match run_with_progress(
+        "Wallpaper",
+        "Fetching the pinned manifest and resolving the requested wallpaper.",
+        || resolve_wallpaper_selection(&wallpaper_selection),
+    ) {
+        Ok(asset) => asset,
+        Err(error) => return fail(error),
+    };
+
+    if let Err(error) = print_machine_summary(&target, &selected, selected_wallpaper.as_ref()) {
+        return fail(error);
+    }
+
+    loop {
+        match handle_machine_config(
+            &target,
+            &selected,
+            &machine_contents,
+            hardware,
+            selected_wallpaper.as_ref(),
+            &privilege_helper,
+        ) {
             Ok(()) => {
-                if Path::new(HARDWARE_CONFIG).is_file() {
-                    println!("  ✓ generated: {HARDWARE_CONFIG}");
-                    CheckStatus::Ok
-                } else {
-                    eprintln!("  ! command completed, but {HARDWARE_CONFIG} was not created");
-                    CheckStatus::Warning
+                let message = "The installed configuration and selected wallpaper were verified.";
+
+                if let Err(error) = show_done_screen(message) {
+                    return fail(error);
+                }
+
+                println!();
+                println!(
+                    "Installation completed successfully; the installed configuration and selected wallpaper were verified."
+                );
+
+                return ExitCode::SUCCESS;
+            }
+
+            Err(error) => {
+                let retry = match show_error_screen(
+                    &error,
+                    "Retry re-runs the final installation stage. The current transactional rollback and wallpaper rollback logic remain in control of partial changes.",
+                ) {
+                    Ok(value) => value,
+                    Err(screen_error) => {
+                        eprintln!("  ✗ failed to render error screen: {screen_error}");
+                        false
+                    }
+                };
+
+                if !retry {
+                    return fail(error);
                 }
             }
-            Err(error) => {
-                eprintln!("  ! failed to generate hardware configuration: {error}");
-                CheckStatus::Warning
+        }
+    }
+}
+
+fn read_existing_machine_contents(target: &TargetRoot) -> Result<Option<String>, String> {
+    let path = target.machine_config();
+
+    if !path.is_file() {
+        return Ok(None);
+    }
+
+    let contents = fs::read_to_string(&path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+
+    Ok(Some(contents))
+}
+
+fn machine_config_changed(detected: &MachineConfig, selected: &MachineConfig) -> bool {
+    detected.system != selected.system
+        || detected.username != selected.username
+        || detected.hostname != selected.hostname
+        || detected.home_directory != selected.home_directory
+        || detected.personal_enable != selected.personal_enable
+        || detected.persistence_enable != selected.persistence_enable
+        || detected.persistence_path != selected.persistence_path
+}
+
+fn handle_machine_config(
+    target: &TargetRoot,
+    machine: &MachineConfig,
+    machine_contents: &str,
+    hardware: HardwarePreparation,
+    wallpaper: Option<&WallpaperAsset>,
+    privilege_helper: &Path,
+) -> Result<(), String> {
+    validate_machine_config(machine)?;
+    validate_username_for_target(target, &machine.username)?;
+
+    if hardware == HardwarePreparation::Unavailable {
+        return Err(
+            "hardware-configuration.nix is missing and generation was declined".to_string(),
+        );
+    }
+
+    if !prompt_yes_no(
+        "Validate staged configuration, install the selected configuration, and apply the selected wallpaper?",
+    )? {
+        println!("  Installation skipped.");
+        return Ok(());
+    }
+
+    run_with_progress(
+        "Install",
+        "Applying the selected wallpaper and transactionally installing the validated Neodots configuration.",
+        || {
+            let wallpaper_receipt = match wallpaper {
+                Some(asset) => Some(
+                    install_selected_wallpaper(target, machine, asset)
+                        .map_err(|error| format!("wallpaper preparation failed: {error}"))?,
+                ),
+                None => None,
+            };
+
+            let install_result = validate_and_install_machine_config(
+                target,
+                machine,
+                machine_contents,
+                hardware,
+                privilege_helper,
+            );
+
+            if let Err(error) = install_result {
+                if let Some(receipt) = &wallpaper_receipt
+                    && let Err(rollback_error) = rollback_wallpaper_install(receipt)
+                {
+                    return Err(format!(
+                        "configuration installation failed: {error}; wallpaper rollback also failed: {rollback_error}"
+                    ));
+                }
+
+                return Err(error);
             }
+
+            Ok(())
         },
-        Ok(false) => {
-            println!("  skipped.");
-            CheckStatus::Warning
-        }
-        Err(error) => {
-            eprintln!("  ! could not read your response: {error}");
-            CheckStatus::Warning
-        }
-    }
+    )
 }
 
-fn check_git() -> CheckStatus {
-    println!("[git]");
-
-    match find_in_path("git") {
-        Some(path) => {
-            println!("  ✓ found: {}", path.display());
-            CheckStatus::Ok
-        }
-        None => {
-            println!("  ! git was not found in PATH");
-            println!("  The installer will need git for repository operations.");
-            CheckStatus::Warning
-        }
-    }
-}
-
-fn check_privilege_helper() -> CheckStatus {
-    println!("[privilege]");
-
-    match find_privilege_helper() {
-        Some(path) => {
-            println!("  ✓ found: {}", path.display());
-            CheckStatus::Ok
-        }
-        None => {
-            println!("  ! neither sudo nor doas was found in PATH");
-            println!("  The installer needs a privilege escalation tool for system changes.");
-            CheckStatus::Warning
-        }
-    }
-}
-
-fn find_privilege_helper() -> Option<PathBuf> {
-    find_in_path("sudo").or_else(|| find_in_path("doas"))
-}
-
-fn find_in_path(program: &str) -> Option<PathBuf> {
-    let path_var = env::var_os("PATH")?;
-
-    for directory in env::split_paths(&path_var) {
-        let candidate = directory.join(program);
-        if is_executable_file(&candidate) {
-            return Some(candidate);
-        }
-    }
-
-    None
-}
-
-#[cfg(unix)]
-fn is_executable_file(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-
-    match fs::metadata(path) {
-        Ok(metadata) => metadata.is_file() && metadata.permissions().mode() & 0o111 != 0,
-        Err(_) => false,
-    }
-}
-
-#[cfg(not(unix))]
-fn is_executable_file(path: &Path) -> bool {
-    fs::metadata(path).map(|m| m.is_file()).unwrap_or(false)
-}
-
-fn run_generate_config(privilege: Option<&Path>) -> io::Result<()> {
-    let mut command = match privilege {
-        Some(tool) => Command::new(tool),
-        None => Command::new(GENERATE_CONFIG_COMMAND),
-    };
-
-    if privilege.is_some() {
-        command.arg(GENERATE_CONFIG_COMMAND);
-    }
-
-    let status = command.status()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("{command:?} exited with {status}"),
-        ))
-    }
-}
-
-fn prompt_yes_no(prompt: &str) -> io::Result<bool> {
-    print!("{prompt}");
-    io::stdout().flush()?;
-
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-
-    Ok(matches!(input.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
+fn fail(error: String) -> ExitCode {
+    eprintln!("  ✗ {error}");
+    ExitCode::FAILURE
 }
