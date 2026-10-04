@@ -3,7 +3,7 @@
 // Author: https://github.com/kaayzouee
 
 use std::{
-    fs,
+    fs::{self, File},
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
 };
@@ -36,6 +36,7 @@ pub fn install_configuration_transactionally(
     target: &TargetRoot,
     privilege_helper: &Path,
     machine_source: &Path,
+    expected_machine_contents: Option<&str>,
     generated_hardware_source: Option<&Path>,
 ) -> Result<(), String> {
     let machine_destination = target.machine_config();
@@ -104,6 +105,11 @@ pub fn install_configuration_transactionally(
             &["-m", "0755", "-p", transaction_dir_string.as_str()],
         )?;
 
+        sync_path(&transaction_root)?;
+        sync_path(&transaction_dir)?;
+
+        verify_expected_machine_state(target, expected_machine_contents)?;
+
         write_transaction_state(privilege_helper, &transaction_dir, STATE_PREPARED)?;
 
         install_file_privileged(privilege_helper, machine_source, &machine_stage)?;
@@ -118,6 +124,20 @@ pub fn install_configuration_transactionally(
             install_file_privileged(privilege_helper, source, &hardware_expected)?;
         }
 
+        sync_path(&machine_stage)?;
+        sync_path(&machine_expected)?;
+
+        if machine_backup.is_file() {
+            sync_path(&machine_backup)?;
+        }
+
+        if generated_hardware_source.is_some() {
+            sync_path(&hardware_stage)?;
+            sync_path(&hardware_expected)?;
+        }
+
+        sync_path(&transaction_dir)?;
+
         if generated_hardware_source.is_some() {
             write_transaction_state(
                 privilege_helper,
@@ -129,6 +149,8 @@ pub fn install_configuration_transactionally(
 
             write_transaction_state(privilege_helper, &transaction_dir, STATE_HARDWARE_INSTALLED)?;
         }
+
+        verify_expected_machine_state(target, expected_machine_contents)?;
 
         write_transaction_state(privilege_helper, &transaction_dir, STATE_INSTALLING_MACHINE)?;
 
@@ -219,10 +241,12 @@ pub fn recover_pending_transactions(
 
         let Some(state) = state else {
             cleanup_transaction_directory(privilege_helper, &transaction_dir)?;
+
             println!(
                 "  ✓ incomplete pre-mutation transaction cleaned up: {}",
                 transaction_dir.display()
             );
+
             continue;
         };
 
@@ -236,15 +260,18 @@ pub fn recover_pending_transactions(
                 cleanup_transaction_directory(privilege_helper, &transaction_dir)?;
                 println!("  ✓ stale transaction cleaned up");
             }
+
             STATE_MACHINE_INSTALLED => {
                 verify_completed_transaction(target, &transaction_dir)?;
                 cleanup_transaction_directory(privilege_helper, &transaction_dir)?;
                 println!("  ✓ completed transaction verified and cleaned up");
             }
+
             STATE_INSTALLING_HARDWARE | STATE_HARDWARE_INSTALLED | STATE_INSTALLING_MACHINE => {
                 recover_transaction(target, privilege_helper, &transaction_dir)?;
                 println!("  ✓ interrupted transaction rolled back");
             }
+
             other => {
                 return Err(format!(
                     "unknown transaction state `{other}` in {}",
@@ -270,19 +297,23 @@ pub fn recover_transaction(
 
     match state.as_str() {
         STATE_PREPARED => cleanup_transaction_directory(privilege_helper, transaction_dir),
+
         STATE_MACHINE_INSTALLED => {
             verify_completed_transaction(target, transaction_dir)?;
             cleanup_transaction_directory(privilege_helper, transaction_dir)
         }
+
         STATE_INSTALLING_HARDWARE | STATE_HARDWARE_INSTALLED => {
             rollback_hardware_transaction(target, privilege_helper, transaction_dir)?;
             cleanup_transaction_directory(privilege_helper, transaction_dir)
         }
+
         STATE_INSTALLING_MACHINE => {
             rollback_machine_transaction(target, privilege_helper, transaction_dir)?;
             rollback_hardware_transaction(target, privilege_helper, transaction_dir)?;
             cleanup_transaction_directory(privilege_helper, transaction_dir)
         }
+
         other => Err(format!(
             "cannot recover transaction {} with unknown state `{other}`",
             transaction_dir.display()
@@ -309,6 +340,10 @@ fn rollback_machine_transaction(
     if machine_destination.exists() {
         if files_equal(&machine_destination, &machine_expected)? {
             remove_path_privileged(privilege_helper, &machine_destination)?;
+
+            if let Some(parent) = machine_destination.parent() {
+                sync_path(parent)?;
+            }
         } else if machine_backup.is_file() && files_equal(&machine_destination, &machine_backup)? {
             return Ok(());
         } else {
@@ -345,7 +380,13 @@ fn rollback_hardware_transaction(
         ));
     }
 
-    remove_path_privileged(privilege_helper, &hardware_destination)
+    remove_path_privileged(privilege_helper, &hardware_destination)?;
+
+    if let Some(parent) = hardware_destination.parent() {
+        sync_path(parent)?;
+    }
+
+    Ok(())
 }
 
 fn verify_completed_transaction(target: &TargetRoot, transaction_dir: &Path) -> Result<(), String> {
@@ -425,7 +466,11 @@ fn read_transaction_state(transaction_dir: &Path) -> Result<Option<String>, Stri
 
     let state = match fs::read_to_string(&state_path) {
         Ok(state) => state,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(None);
+        }
+
         Err(error) => {
             return Err(format!(
                 "cannot read transaction state {}: {error}",
@@ -454,7 +499,65 @@ fn cleanup_transaction_directory(
         return Ok(());
     }
 
-    remove_path_privileged(privilege_helper, transaction_dir)
+    remove_path_privileged(privilege_helper, transaction_dir)?;
+
+    if let Some(parent) = transaction_dir.parent() {
+        sync_path(parent)?;
+    }
+
+    Ok(())
+}
+
+fn verify_expected_machine_state(
+    target: &TargetRoot,
+    expected_machine_contents: Option<&str>,
+) -> Result<(), String> {
+    let destination = target.machine_config();
+
+    match expected_machine_contents {
+        Some(expected) => {
+            let current = fs::read_to_string(&destination).map_err(|error| {
+                format!(
+                    "cannot re-read {} before installation: {error}",
+                    destination.display()
+                )
+            })?;
+
+            if current != expected {
+                return Err(format!(
+                    "{} changed since validation; refusing to overwrite an externally modified configuration",
+                    destination.display()
+                ));
+            }
+        }
+
+        None => {
+            if destination.exists() {
+                return Err(format!(
+                    "{} appeared after validation; refusing to overwrite an externally created configuration",
+                    destination.display()
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn sync_path(path: &Path) -> Result<(), String> {
+    let file = File::open(path).map_err(|error| {
+        format!(
+            "failed to open {} for durability sync: {error}",
+            path.display()
+        )
+    })?;
+
+    file.sync_all().map_err(|error| {
+        format!(
+            "failed to sync {} to stable storage: {error}",
+            path.display()
+        )
+    })
 }
 
 fn replace_path_atomically(
@@ -471,7 +574,19 @@ fn replace_path_atomically(
         privilege_helper,
         "mv",
         &["--", source_string.as_str(), destination_string.as_str()],
-    )
+    )?;
+
+    sync_path(destination)?;
+
+    if let Some(parent) = destination.parent() {
+        sync_path(parent)?;
+    }
+
+    if let Some(parent) = source.parent() {
+        sync_path(parent)?;
+    }
+
+    Ok(())
 }
 
 fn move_path_without_overwrite(
@@ -494,6 +609,16 @@ fn move_path_without_overwrite(
             destination_string.as_str(),
         ],
     )?;
+
+    sync_path(destination)?;
+
+    if let Some(parent) = destination.parent() {
+        sync_path(parent)?;
+    }
+
+    if let Some(parent) = source.parent() {
+        sync_path(parent)?;
+    }
 
     if source.exists() {
         return Err(format!(
@@ -627,6 +752,7 @@ mod tests {
     use std::{fs, os::unix::fs::PermissionsExt};
 
     const HARDWARE_CONFIG_FILE: &str = "hardware-configuration.nix";
+
     fn test_temp_dir(prefix: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
             "{prefix}-{}-{}",
@@ -671,6 +797,7 @@ mod tests {
             target.transaction_root(),
             root.join("etc/neodots-installer/transactions")
         );
+
         assert!(
             !target
                 .transaction_root()
@@ -713,6 +840,7 @@ mod tests {
             fs::read_to_string(&destination).unwrap(),
             "new configuration\n"
         );
+
         assert!(!source.exists());
 
         fs::remove_file(helper).ok();
@@ -738,6 +866,7 @@ mod tests {
             read_transaction_state(&transaction_dir).unwrap(),
             Some(STATE_INSTALLING_MACHINE.to_string())
         );
+
         assert!(!transaction_dir.join(TRANSACTION_STATE_STAGE).exists());
 
         fs::remove_file(helper).ok();
@@ -759,10 +888,12 @@ mod tests {
         fs::create_dir_all(&transaction_dir).unwrap();
 
         write_file(&machine_path, "new machine\n");
+
         write_file(
             &transaction_dir.join(TRANSACTION_MACHINE_EXPECTED),
             "new machine\n",
         );
+
         write_file(
             &transaction_dir.join(TRANSACTION_MACHINE_BACKUP),
             "old machine\n",
@@ -793,10 +924,12 @@ mod tests {
         fs::create_dir_all(&transaction_dir).unwrap();
 
         write_file(&machine_path, "unexpected configuration\n");
+
         write_file(
             &transaction_dir.join(TRANSACTION_MACHINE_EXPECTED),
             "new machine\n",
         );
+
         write_file(
             &transaction_dir.join(TRANSACTION_MACHINE_BACKUP),
             "old machine\n",
@@ -807,6 +940,7 @@ mod tests {
         let error = rollback_machine_transaction(&target, &helper, &transaction_dir).unwrap_err();
 
         assert!(error.contains("differs from both the expected new configuration and its backup"));
+
         assert_eq!(
             fs::read_to_string(&machine_path).unwrap(),
             "unexpected configuration\n"
@@ -831,14 +965,17 @@ mod tests {
         fs::create_dir_all(&transaction_dir).unwrap();
 
         write_file(&machine_path, "existing machine\n");
+
         write_file(
             &transaction_dir.join(TRANSACTION_MACHINE_EXPECTED),
             "new machine\n",
         );
+
         write_file(
             &transaction_dir.join(TRANSACTION_MACHINE_BACKUP),
             "old machine\n",
         );
+
         write_file(
             &transaction_dir.join(TRANSACTION_MACHINE_STAGE),
             "new machine\n",
@@ -852,6 +989,7 @@ mod tests {
             fs::read_to_string(&machine_path).unwrap(),
             "existing machine\n"
         );
+
         assert!(!transaction_dir.exists());
 
         fs::remove_file(helper).ok();
@@ -880,14 +1018,17 @@ mod tests {
             &transaction_dir.join(TRANSACTION_MACHINE_EXPECTED),
             "new machine\n",
         );
+
         write_file(
             &transaction_dir.join(TRANSACTION_MACHINE_BACKUP),
             "old machine\n",
         );
+
         write_file(
             &transaction_dir.join(TRANSACTION_HARDWARE_EXPECTED),
             "generated hardware\n",
         );
+
         write_file(
             &transaction_dir.join(TRANSACTION_STATE_FILE),
             STATE_INSTALLING_MACHINE,
@@ -898,6 +1039,7 @@ mod tests {
         recover_transaction(&target, &helper, &transaction_dir).unwrap();
 
         assert_eq!(fs::read_to_string(&machine_path).unwrap(), "old machine\n");
+
         assert!(!hardware_path.exists());
         assert!(!transaction_dir.exists());
 
@@ -927,6 +1069,7 @@ mod tests {
             &transaction_dir.join(TRANSACTION_HARDWARE_EXPECTED),
             "generated hardware\n",
         );
+
         write_file(
             &transaction_dir.join(TRANSACTION_STATE_FILE),
             STATE_HARDWARE_INSTALLED,
@@ -958,10 +1101,12 @@ mod tests {
         fs::create_dir_all(&transaction_dir).unwrap();
 
         write_file(&machine_path, "new machine\n");
+
         write_file(
             &transaction_dir.join(TRANSACTION_MACHINE_EXPECTED),
             "new machine\n",
         );
+
         write_file(
             &transaction_dir.join(TRANSACTION_STATE_FILE),
             STATE_MACHINE_INSTALLED,
@@ -972,6 +1117,43 @@ mod tests {
         recover_pending_transactions(&target, &helper).unwrap();
 
         assert!(!transaction_dir.exists());
+
+        fs::remove_file(helper).ok();
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn refuses_external_machine_change_before_installation() {
+        let root = test_temp_dir("neodots-installer-concurrency-check");
+        let helper = fake_privilege_helper();
+
+        let target_root = root.join("target");
+        let nixos_dir = target_root.join("etc/nixos");
+        let machine_path = nixos_dir.join("hosts/nixos/machine.nix");
+        let machine_source = root.join("machine-source.nix");
+
+        fs::create_dir_all(machine_path.parent().unwrap()).unwrap();
+
+        write_file(&machine_path, "externally changed\n");
+        write_file(&machine_source, "new machine\n");
+
+        let target = TargetRoot::from_path(target_root).unwrap();
+
+        let error = install_configuration_transactionally(
+            &target,
+            &helper,
+            &machine_source,
+            Some("old validated machine\n"),
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("changed since validation"));
+
+        assert_eq!(
+            fs::read_to_string(&machine_path).unwrap(),
+            "externally changed\n"
+        );
 
         fs::remove_file(helper).ok();
         fs::remove_dir_all(root).ok();
@@ -1001,15 +1183,18 @@ mod tests {
             &target,
             &helper,
             &machine_source,
+            Some("old machine\n"),
             Some(&hardware_source),
         )
         .unwrap();
 
         assert_eq!(fs::read_to_string(&machine_path).unwrap(), "new machine\n");
+
         assert_eq!(
             fs::read_to_string(&hardware_path).unwrap(),
             "generated hardware\n"
         );
+
         assert!(
             !target.transaction_root().exists()
                 || fs::read_dir(target.transaction_root())

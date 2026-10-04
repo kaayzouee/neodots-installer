@@ -6,7 +6,9 @@ use std::{fs, os::unix::fs as unix_fs, path::Path, process::Command};
 
 use crate::{
     config::{MachineConfig, validate_machine_config},
-    preflight::{HardwarePreparation, generate_hardware_configuration_in_staging},
+    preflight::{
+        HardwarePreparation, check_persistence, generate_hardware_configuration_in_staging,
+    },
     privilege::{create_temp_directory, create_temp_file, find_in_path},
     target::TargetRoot,
     transaction::{find_legacy_transaction, install_configuration_transactionally},
@@ -23,6 +25,19 @@ pub fn validate_and_install_machine_config(
     privilege_helper: &Path,
 ) -> Result<(), String> {
     validate_machine_config(machine)?;
+
+    let expected_machine_contents = match fs::read_to_string(target.machine_config()) {
+        Ok(contents) => Some(contents),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(format!(
+                "cannot snapshot {} before validation: {error}",
+                target.machine_config().display()
+            ));
+        }
+    };
+
+    check_persistence(target, machine, privilege_helper)?;
 
     let validation_dir = create_temp_directory("neodots-installer-validation")?;
 
@@ -119,6 +134,7 @@ pub fn validate_and_install_machine_config(
             target,
             privilege_helper,
             &machine_temp,
+            expected_machine_contents.as_deref(),
             generated_hardware.as_deref(),
         );
 
