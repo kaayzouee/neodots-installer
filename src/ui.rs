@@ -2,16 +2,30 @@
 // Copyright (C) 2026 kaayzouee
 // Author: https://github.com/kaayzouee
 
-use std::io::{self, Write};
+use std::{
+    env,
+    io::{self, IsTerminal, Write},
+};
 
 use crate::config::{
-    MachineConfig, home_directory_for_username, render_machine_config, validate_absolute_path,
-    validate_hostname, validate_username_for_target,
+    MachineConfig, PasswordState, home_directory_for_username, render_machine_config,
+    validate_absolute_path, validate_hostname, validate_username_for_target,
 };
 use crate::target::TargetRoot;
-use crate::wallpaper::{WallpaperSelection, validate_wallpaper_id};
+use crate::tui;
+use crate::wallpaper::{WallpaperAsset, WallpaperSelection, validate_wallpaper_id};
+
+pub fn tui_enabled() -> bool {
+    env::var_os("NEODOTS_PLAIN_UI").is_none()
+        && io::stdin().is_terminal()
+        && io::stdout().is_terminal()
+}
 
 pub fn prompt_yes_no(prompt: &str) -> Result<bool, String> {
+    if tui_enabled() {
+        return tui::confirm(prompt, false);
+    }
+
     prompt_yes_no_default(prompt, false)
 }
 
@@ -73,7 +87,7 @@ fn prompt_text(
     }
 }
 
-pub fn select_machine_config(
+fn select_machine_config_plain(
     target: &TargetRoot,
     detected: &MachineConfig,
 ) -> Result<MachineConfig, String> {
@@ -111,39 +125,33 @@ pub fn select_machine_config(
             })?;
     }
 
-    println!();
-    println!("Selected configuration:");
-    println!("  username: {}", selected.username);
-    println!("  hostname: {}", selected.hostname);
-    println!("  home: {}", selected.home_directory);
-
-    println!(
-        "  personal: {}",
-        if selected.personal_enable {
-            "enabled"
-        } else {
-            "disabled"
-        }
-    );
-
-    println!(
-        "  persistence: {} ({})",
-        if selected.persistence_enable {
-            "enabled"
-        } else {
-            "disabled"
-        },
-        selected.persistence_path
-    );
-
-    if !prompt_yes_no("Use this configuration?")? {
-        return Err("configuration selection cancelled".to_string());
-    }
-
     Ok(selected)
 }
 
-pub fn select_wallpaper() -> Result<WallpaperSelection, String> {
+pub fn select_machine_config(
+    target: &TargetRoot,
+    detected: &MachineConfig,
+) -> Result<MachineConfig, String> {
+    if tui_enabled() {
+        return tui::select_machine_config(target, detected);
+    }
+
+    select_machine_config_plain(target, detected)
+}
+
+pub fn show_password_state(state: PasswordState) -> Result<(), String> {
+    if tui_enabled() {
+        return tui::show_password_state(state);
+    }
+
+    println!();
+    println!("[password]");
+    println!("  ✓ password state: {}", state.as_str());
+
+    Ok(())
+}
+
+fn select_wallpaper_plain() -> Result<WallpaperSelection, String> {
     println!();
     println!("[wallpaper]");
     println!("  n = none");
@@ -179,7 +187,23 @@ pub fn select_wallpaper() -> Result<WallpaperSelection, String> {
     }
 }
 
-pub fn print_machine_summary(target: &TargetRoot, machine: &MachineConfig) {
+pub fn select_wallpaper() -> Result<WallpaperSelection, String> {
+    if tui_enabled() {
+        return tui::select_wallpaper();
+    }
+
+    select_wallpaper_plain()
+}
+
+pub fn print_machine_summary(
+    target: &TargetRoot,
+    machine: &MachineConfig,
+    wallpaper: Option<&WallpaperAsset>,
+) -> Result<(), String> {
+    if tui_enabled() {
+        return tui::show_review(target, machine, wallpaper);
+    }
+
     let path = target.machine_config();
 
     if path.is_file() {
@@ -195,4 +219,59 @@ pub fn print_machine_summary(target: &TargetRoot, machine: &MachineConfig) {
     println!("----------------------------------------");
     print!("{}", render_machine_config(machine));
     println!("----------------------------------------");
+
+    match wallpaper {
+        Some(asset) => {
+            println!();
+            println!("Wallpaper:");
+            println!("  id: {}", asset.id);
+            println!("  file: {}", asset.filename);
+            println!("  sha256: {}", asset.sha256);
+        }
+
+        None => {
+            println!();
+            println!("Wallpaper: none");
+        }
+    }
+
+    Ok(())
+}
+
+pub fn run_with_progress<T, F>(title: &str, detail: &str, operation: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String>,
+{
+    if tui_enabled() {
+        return tui::run_with_progress(title, detail, operation);
+    }
+
+    println!();
+    println!("[progress]");
+    println!("  {title}");
+    println!("  {detail}");
+
+    operation()
+}
+
+pub fn show_error_screen(message: &str, recovery_hint: &str) -> Result<bool, String> {
+    if tui_enabled() {
+        return tui::show_error(message, recovery_hint);
+    }
+
+    eprintln!("  ✗ {message}");
+    eprintln!("  recovery: {recovery_hint}");
+    Ok(false)
+}
+
+pub fn show_done_screen(message: &str) -> Result<(), String> {
+    if tui_enabled() {
+        return tui::show_done(message);
+    }
+
+    println!();
+    println!("[done]");
+    println!("  {message}");
+
+    Ok(())
 }

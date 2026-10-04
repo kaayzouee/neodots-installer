@@ -8,6 +8,7 @@ mod privilege;
 mod staging;
 mod target;
 mod transaction;
+mod tui;
 mod ui;
 mod wallpaper;
 
@@ -25,10 +26,13 @@ use privilege::check_privilege_helper;
 use staging::validate_and_install_machine_config;
 use target::{TargetRoot, acquire_installer_lock};
 use transaction::recover_pending_transactions;
-use ui::{print_machine_summary, prompt_yes_no, select_machine_config, select_wallpaper};
+use ui::{
+    print_machine_summary, prompt_yes_no, run_with_progress, select_machine_config,
+    select_wallpaper, show_done_screen, show_error_screen, show_password_state,
+};
 use wallpaper::{
-    WallpaperAsset, install_selected_wallpaper, print_wallpaper_summary,
-    resolve_wallpaper_selection, rollback_wallpaper_install,
+    WallpaperAsset, install_selected_wallpaper, resolve_wallpaper_selection,
+    rollback_wallpaper_install,
 };
 
 fn main() -> ExitCode {
@@ -102,10 +106,9 @@ fn main() -> ExitCode {
         Err(error) => return fail(error),
     };
 
-    println!();
-    println!("[password]");
-    println!("  ✓ primary user: {}", selected.username);
-    println!("  ✓ password state: {}", password_state.as_str());
+    if let Err(error) = show_password_state(password_state) {
+        return fail(error);
+    }
 
     if let Err(error) = validate_primary_password_state(password_state) {
         return fail(error);
@@ -137,37 +140,65 @@ arbitrary declarations outside that contract."
         _ => render_machine_config(&selected),
     };
 
-    print_machine_summary(&target, &selected);
-
     let wallpaper_selection = match select_wallpaper() {
         Ok(selection) => selection,
         Err(error) => return fail(error),
     };
 
-    let selected_wallpaper = match resolve_wallpaper_selection(&wallpaper_selection) {
+    let selected_wallpaper = match run_with_progress(
+        "Wallpaper",
+        "Fetching the pinned manifest and resolving the requested wallpaper.",
+        || resolve_wallpaper_selection(&wallpaper_selection),
+    ) {
         Ok(asset) => asset,
         Err(error) => return fail(error),
     };
 
-    print_wallpaper_summary(selected_wallpaper.as_ref());
+    if let Err(error) = print_machine_summary(&target, &selected, selected_wallpaper.as_ref()) {
+        return fail(error);
+    }
 
-    match handle_machine_config(
-        &target,
-        &selected,
-        &machine_contents,
-        hardware,
-        selected_wallpaper.as_ref(),
-        &privilege_helper,
-    ) {
-        Ok(()) => {
-            println!();
-            println!(
-                "Installation completed successfully; the installed configuration \
-and selected wallpaper were verified."
-            );
-            ExitCode::SUCCESS
+    loop {
+        match handle_machine_config(
+            &target,
+            &selected,
+            &machine_contents,
+            hardware,
+            selected_wallpaper.as_ref(),
+            &privilege_helper,
+        ) {
+            Ok(()) => {
+                let message = "The installed configuration and selected wallpaper were verified.";
+
+                if let Err(error) = show_done_screen(message) {
+                    return fail(error);
+                }
+
+                println!();
+                println!(
+                    "Installation completed successfully; the installed configuration and selected wallpaper were verified."
+                );
+
+                return ExitCode::SUCCESS;
+            }
+
+            Err(error) => {
+                let retry = match show_error_screen(
+                    &error,
+                    "Retry re-runs the final installation stage. The current transactional rollback and wallpaper rollback logic remain in control of partial changes.",
+                ) {
+                    Ok(value) => value,
+                    Err(screen_error) => {
+                        eprintln!("  ✗ failed to render error screen: {screen_error}");
+                        false
+                    }
+                };
+
+                if !retry {
+                    return fail(error);
+                }
+            }
         }
-        Err(error) => fail(error),
     }
 }
 
@@ -218,35 +249,41 @@ fn handle_machine_config(
         return Ok(());
     }
 
-    let wallpaper_receipt = match wallpaper {
-        Some(asset) => Some(
-            install_selected_wallpaper(target, machine, asset)
-                .map_err(|error| format!("wallpaper preparation failed: {error}"))?,
-        ),
-        None => None,
-    };
+    run_with_progress(
+        "Install",
+        "Applying the selected wallpaper and transactionally installing the validated Neodots configuration.",
+        || {
+            let wallpaper_receipt = match wallpaper {
+                Some(asset) => Some(
+                    install_selected_wallpaper(target, machine, asset)
+                        .map_err(|error| format!("wallpaper preparation failed: {error}"))?,
+                ),
+                None => None,
+            };
 
-    let install_result = validate_and_install_machine_config(
-        target,
-        machine,
-        machine_contents,
-        hardware,
-        privilege_helper,
-    );
+            let install_result = validate_and_install_machine_config(
+                target,
+                machine,
+                machine_contents,
+                hardware,
+                privilege_helper,
+            );
 
-    if let Err(error) = install_result {
-        if let Some(receipt) = &wallpaper_receipt
-            && let Err(rollback_error) = rollback_wallpaper_install(receipt)
-        {
-            return Err(format!(
-                "configuration installation failed: {error}; wallpaper rollback also failed: {rollback_error}"
-            ));
-        }
+            if let Err(error) = install_result {
+                if let Some(receipt) = &wallpaper_receipt
+                    && let Err(rollback_error) = rollback_wallpaper_install(receipt)
+                {
+                    return Err(format!(
+                        "configuration installation failed: {error}; wallpaper rollback also failed: {rollback_error}"
+                    ));
+                }
 
-        return Err(error);
-    }
+                return Err(error);
+            }
 
-    Ok(())
+            Ok(())
+        },
+    )
 }
 
 fn fail(error: String) -> ExitCode {

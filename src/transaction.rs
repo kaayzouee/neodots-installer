@@ -8,6 +8,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(test)]
+use std::os::unix::fs::PermissionsExt;
+
 use crate::{
     privilege::{
         create_temp_file, path_to_string, remove_path_privileged, run_privileged_command,
@@ -749,7 +752,6 @@ fn install_file_privileged(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
 
     const HARDWARE_CONFIG_FILE: &str = "hardware-configuration.nix";
 
@@ -773,14 +775,25 @@ mod tests {
     }
 
     fn fake_privilege_helper() -> PathBuf {
-        let path =
-            create_temp_file("neodots-installer-test-helper", "#!/bin/sh\nexec \"$@\"\n").unwrap();
+        let directory = test_temp_dir("neodots-installer-test-helper");
+        let path = directory.join("helper");
+
+        fs::write(&path, "#!/bin/sh\nexec \"$@\"\n").unwrap();
 
         let mut permissions = fs::metadata(&path).unwrap().permissions();
         permissions.set_mode(0o755);
+
         fs::set_permissions(&path, permissions).unwrap();
 
         path
+    }
+
+    fn remove_test_helper(path: &Path) {
+        fs::remove_file(path).ok();
+
+        if let Some(parent) = path.parent() {
+            fs::remove_dir_all(parent).ok();
+        }
     }
 
     #[test]
@@ -838,7 +851,7 @@ mod tests {
 
         assert!(!source.exists());
 
-        fs::remove_file(helper).ok();
+        remove_test_helper(&helper);
         fs::remove_dir_all(root).ok();
     }
 
@@ -864,7 +877,7 @@ mod tests {
 
         assert!(!transaction_dir.join(TRANSACTION_STATE_STAGE).exists());
 
-        fs::remove_file(helper).ok();
+        remove_test_helper(&helper);
         fs::remove_dir_all(root).ok();
     }
 
@@ -900,7 +913,7 @@ mod tests {
 
         assert_eq!(fs::read_to_string(&machine_path).unwrap(), "old machine\n");
 
-        fs::remove_file(helper).ok();
+        remove_test_helper(&helper);
         fs::remove_dir_all(root).ok();
     }
 
@@ -941,7 +954,7 @@ mod tests {
             "unexpected configuration\n"
         );
 
-        fs::remove_file(helper).ok();
+        remove_test_helper(&helper);
         fs::remove_dir_all(root).ok();
     }
 
@@ -987,7 +1000,7 @@ mod tests {
 
         assert!(!transaction_dir.exists());
 
-        fs::remove_file(helper).ok();
+        remove_test_helper(&helper);
         fs::remove_dir_all(root).ok();
     }
 
@@ -1038,7 +1051,7 @@ mod tests {
         assert!(!hardware_path.exists());
         assert!(!transaction_dir.exists());
 
-        fs::remove_file(helper).ok();
+        remove_test_helper(&helper);
         fs::remove_dir_all(root).ok();
     }
 
@@ -1077,7 +1090,7 @@ mod tests {
         assert!(!hardware_path.exists());
         assert!(!transaction_dir.exists());
 
-        fs::remove_file(helper).ok();
+        remove_test_helper(&helper);
         fs::remove_dir_all(root).ok();
     }
 
@@ -1113,7 +1126,7 @@ mod tests {
 
         assert!(!transaction_dir.exists());
 
-        fs::remove_file(helper).ok();
+        remove_test_helper(&helper);
         fs::remove_dir_all(root).ok();
     }
 
@@ -1150,7 +1163,7 @@ mod tests {
             "externally changed\n"
         );
 
-        fs::remove_file(helper).ok();
+        remove_test_helper(&helper);
         fs::remove_dir_all(root).ok();
     }
 
@@ -1198,7 +1211,7 @@ mod tests {
                     .is_none()
         );
 
-        fs::remove_file(helper).ok();
+        remove_test_helper(&helper);
         fs::remove_dir_all(root).ok();
     }
 }

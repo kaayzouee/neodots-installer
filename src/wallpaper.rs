@@ -855,27 +855,6 @@ pub fn rollback_wallpaper_install(receipt: &WallpaperInstallReceipt) -> Result<(
     }
 }
 
-pub fn print_wallpaper_summary(asset: Option<&WallpaperAsset>) {
-    match asset {
-        Some(asset) => {
-            println!();
-            println!("[wallpaper]");
-            println!("  ✓ id: {}", asset.id);
-            println!("  ✓ filename: {}", asset.filename);
-            println!("  ✓ size: {} bytes", asset.size);
-            println!("  ✓ format: {}", asset.format);
-            println!("  ✓ sha256: {}", asset.sha256);
-            println!("  ✓ repository revision: {}", WALLPAPER_PINNED_REVISION);
-        }
-
-        None => {
-            println!();
-            println!("[wallpaper]");
-            println!("  ✓ selection: none");
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -894,12 +873,12 @@ mod tests {
     #[test]
     fn manifest_header_is_parsed() {
         let contents = "schema\t1\n\
-repository\tkaayzouee/neodots-wallpaper\n\
-source_revision\tc4be01669d109fc6f531d45f6b723f69f0ae542a\n\
-wallpaper\tid\tfilename\tsha256\tsize\tformat\n\
-wallpaper\tastronaut.png\tastronaut.png\t\
-0000000000000000000000000000000000000000000000000000000000000000\
-\t4081051\tpng\n";
+ repository\tkaayzouee/neodots-wallpaper\n\
+ source_revision\tc4be01669d109fc6f531d45f6b723f69f0ae542a\n\
+ wallpaper\tid\tfilename\tsha256\tsize\tformat\n\
+ wallpaper\tastronaut.png\tastronaut.png\t\
+ 0000000000000000000000000000000000000000000000000000000000000000\
+ \t4081051\tpng\n";
 
         let manifest = parse_manifest(contents).unwrap();
 
@@ -913,12 +892,12 @@ wallpaper\tastronaut.png\tastronaut.png\t\
     #[test]
     fn manifest_rejects_unpinned_source_revision() {
         let contents = "schema\t1\n\
-repository\tkaayzouee/neodots-wallpaper\n\
-source_revision\t7bfdf10d16ad3a689f9f0cf3a0930da3d1a245a8\n\
-wallpaper\tid\tfilename\tsha256\tsize\tformat\n\
-wallpaper\tastronaut.png\tastronaut.png\t\
-0000000000000000000000000000000000000000000000000000000000000000\
-\t4081051\tpng\n";
+ repository\tkaayzouee/neodots-wallpaper\n\
+ source_revision\t7bfdf10d16ad3a689f9f0cf3a0930da3d1a245a8\n\
+ wallpaper\tid\tfilename\tsha256\tsize\tformat\n\
+ wallpaper\tastronaut.png\tastronaut.png\t\
+ 0000000000000000000000000000000000000000000000000000000000000000\
+ \t4081051\tpng\n";
 
         let error = parse_manifest(contents).unwrap_err();
 
@@ -929,12 +908,12 @@ wallpaper\tastronaut.png\tastronaut.png\t\
     #[test]
     fn manifest_rejects_path_traversal() {
         let contents = "schema\t1\n\
-repository\tkaayzouee/neodots-wallpaper\n\
-source_revision\tc4be01669d109fc6f531d45f6b723f69f0ae542a\n\
-wallpaper\tid\tfilename\tsha256\tsize\tformat\n\
-wallpaper\tbad\t../bad.png\t\
-0000000000000000000000000000000000000000000000000000000000000000\
-\t1\tpng\n";
+ repository\tkaayzouee/neodots-wallpaper\n\
+ source_revision\tc4be01669d109fc6f531d45f6b723f69f0ae542a\n\
+ wallpaper\tid\tfilename\tsha256\tsize\tformat\n\
+ wallpaper\tbad\t../bad.png\t\
+ 0000000000000000000000000000000000000000000000000000000000000000\
+ \t1\tpng\n";
 
         assert!(parse_manifest(contents).is_err());
     }
@@ -945,11 +924,11 @@ wallpaper\tbad\t../bad.png\t\
 
         let contents = format!(
             "schema\t1\n\
-repository\tkaayzouee/neodots-wallpaper\n\
-source_revision\t{WALLPAPER_PINNED_REVISION}\n\
-wallpaper\tid\tfilename\tsha256\tsize\tformat\n\
-wallpaper\tone\tone.png\t{digest}\t1\tpng\n\
-wallpaper\tone\ttwo.png\t{digest}\t1\tpng\n"
+ repository\tkaayzouee/neodots-wallpaper\n\
+ source_revision\t{WALLPAPER_PINNED_REVISION}\n\
+ wallpaper\tid\tfilename\tsha256\tsize\tformat\n\
+ wallpaper\tone\tone.png\t{digest}\t1\tpng\n\
+ wallpaper\tone\ttwo.png\t{digest}\t1\tpng\n"
         );
 
         assert!(parse_manifest(&contents).is_err());
@@ -959,12 +938,12 @@ wallpaper\tone\ttwo.png\t{digest}\t1\tpng\n"
     fn specific_selection_returns_matching_asset() {
         let contents = format!(
             "schema\t1\n\
-repository\tkaayzouee/neodots-wallpaper\n\
-source_revision\t{WALLPAPER_PINNED_REVISION}\n\
-wallpaper\tid\tfilename\tsha256\tsize\tformat\n\
-wallpaper\tone\tone.png\t\
-0000000000000000000000000000000000000000000000000000000000000000\
-\t1\tpng\n"
+ repository\tkaayzouee/neodots-wallpaper\n\
+ source_revision\t{WALLPAPER_PINNED_REVISION}\n\
+ wallpaper\tid\tfilename\tsha256\tsize\tformat\n\
+ wallpaper\tone\tone.png\t\
+ 0000000000000000000000000000000000000000000000000000000000000000\
+ \t1\tpng\n"
         );
 
         let manifest = parse_manifest(&contents).unwrap();
@@ -982,15 +961,15 @@ wallpaper\tone\tone.png\t\
     fn random_selection_returns_an_entry() {
         let contents = format!(
             "schema\t1\n\
-repository\tkaayzouee/neodots-wallpaper\n\
-source_revision\t{WALLPAPER_PINNED_REVISION}\n\
-wallpaper\tid\tfilename\tsha256\tsize\tformat\n\
-wallpaper\tone\tone.png\t\
-0000000000000000000000000000000000000000000000000000000000000000\
-\t1\tpng\n\
-wallpaper\ttwo\ttwo.png\t\
-0000000000000000000000000000000000000000000000000000000000000000\
-\t1\tpng\n"
+ repository\tkaayzouee/neodots-wallpaper\n\
+ source_revision\t{WALLPAPER_PINNED_REVISION}\n\
+ wallpaper\tid\tfilename\tsha256\tsize\tformat\n\
+ wallpaper\tone\tone.png\t\
+ 0000000000000000000000000000000000000000000000000000000000000000\
+ \t1\tpng\n\
+ wallpaper\ttwo\ttwo.png\t\
+ 0000000000000000000000000000000000000000000000000000000000000000\
+ \t1\tpng\n"
         );
 
         let manifest = parse_manifest(&contents).unwrap();
