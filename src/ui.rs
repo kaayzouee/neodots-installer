@@ -6,7 +6,7 @@ use std::io::{self, Write};
 
 use crate::config::{
     MachineConfig, home_directory_for_username, render_machine_config, validate_absolute_path,
-    validate_hostname, validate_username,
+    validate_hostname, validate_username_for_target,
 };
 use crate::target::TargetRoot;
 
@@ -17,6 +17,7 @@ pub fn prompt_yes_no(prompt: &str) -> Result<bool, String> {
 fn prompt_yes_no_default(prompt: &str, default: bool) -> Result<bool, String> {
     loop {
         let suffix = if default { " [Y/n] " } else { " [y/N] " };
+
         print!("{prompt}{suffix}");
 
         io::stdout()
@@ -24,6 +25,7 @@ fn prompt_yes_no_default(prompt: &str, default: bool) -> Result<bool, String> {
             .map_err(|error| format!("failed to flush stdout: {error}"))?;
 
         let mut input = String::new();
+
         io::stdin()
             .read_line(&mut input)
             .map_err(|error| format!("failed to read input: {error}"))?;
@@ -50,11 +52,13 @@ fn prompt_text(
             .map_err(|error| format!("failed to flush stdout: {error}"))?;
 
         let mut input = String::new();
+
         io::stdin()
             .read_line(&mut input)
             .map_err(|error| format!("failed to read input: {error}"))?;
 
         let candidate = input.trim();
+
         let value = if candidate.is_empty() {
             current.to_string()
         } else {
@@ -68,17 +72,23 @@ fn prompt_text(
     }
 }
 
-pub fn select_machine_config(detected: &MachineConfig) -> Result<MachineConfig, String> {
+pub fn select_machine_config(
+    target: &TargetRoot,
+    detected: &MachineConfig,
+) -> Result<MachineConfig, String> {
     println!();
     println!("[configuration]");
     println!("  Press Enter to keep each detected value.");
 
     let mut selected = detected.clone();
 
-    selected.username = prompt_text("username", &detected.username, validate_username)?;
+    selected.username = prompt_text("username", &detected.username, |value| {
+        validate_username_for_target(target, value)
+    })?;
 
     if selected.username != detected.username {
         selected.home_directory = home_directory_for_username(&selected.username);
+
         println!(
             "  homeDirectory → {} (derived from selected username)",
             selected.home_directory
@@ -105,6 +115,7 @@ pub fn select_machine_config(detected: &MachineConfig) -> Result<MachineConfig, 
     println!("  username: {}", selected.username);
     println!("  hostname: {}", selected.hostname);
     println!("  home: {}", selected.home_directory);
+
     println!(
         "  personal: {}",
         if selected.personal_enable {
@@ -113,6 +124,7 @@ pub fn select_machine_config(detected: &MachineConfig) -> Result<MachineConfig, 
             "disabled"
         }
     );
+
     println!(
         "  persistence: {} ({})",
         if selected.persistence_enable {

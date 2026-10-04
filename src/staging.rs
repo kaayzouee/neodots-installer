@@ -5,7 +5,7 @@
 use std::{fs, os::unix::fs as unix_fs, path::Path, process::Command};
 
 use crate::{
-    config::{MachineConfig, render_machine_config, validate_machine_config},
+    config::{MachineConfig, validate_machine_config},
     preflight::{HardwarePreparation, generate_hardware_configuration_in_staging},
     privilege::{create_temp_directory, create_temp_file, find_in_path},
     target::TargetRoot,
@@ -18,13 +18,13 @@ const NIX_COMMAND: &str = "nix";
 pub fn validate_and_install_machine_config(
     target: &TargetRoot,
     machine: &MachineConfig,
+    machine_contents: &str,
     hardware: HardwarePreparation,
     privilege_helper: &Path,
 ) -> Result<(), String> {
     validate_machine_config(machine)?;
 
     let validation_dir = create_temp_directory("neodots-installer-validation")?;
-    let machine_contents = render_machine_config(machine);
 
     let result = (|| {
         if let Some(legacy_transaction) = find_legacy_transaction(target)? {
@@ -40,6 +40,7 @@ pub fn validate_and_install_machine_config(
         );
 
         let staged_nixos_dir = validation_dir.join("etc").join("nixos");
+
         fs::create_dir_all(&staged_nixos_dir).map_err(|error| {
             format!(
                 "failed to create staged NixOS directory {}: {error}",
@@ -98,7 +99,7 @@ pub fn validate_and_install_machine_config(
             })?;
         }
 
-        fs::write(&staged_machine_path, &machine_contents).map_err(|error| {
+        fs::write(&staged_machine_path, machine_contents).map_err(|error| {
             format!(
                 "failed to write staged machine.nix {}: {error}",
                 staged_machine_path.display()
@@ -112,7 +113,7 @@ pub fn validate_and_install_machine_config(
             .as_ref()
             .map(|root| root.join("etc").join("nixos").join(HARDWARE_CONFIG_FILE));
 
-        let machine_temp = create_temp_file("neodots-installer-machine", &machine_contents)?;
+        let machine_temp = create_temp_file("neodots-installer-machine", machine_contents)?;
 
         let install_result = install_configuration_transactionally(
             target,
@@ -122,6 +123,7 @@ pub fn validate_and_install_machine_config(
         );
 
         fs::remove_file(&machine_temp).ok();
+
         if let Some(root) = generated_hardware_root {
             fs::remove_dir_all(root).ok();
         }
@@ -134,6 +136,7 @@ pub fn validate_and_install_machine_config(
     }
 
     fs::remove_dir_all(validation_dir).ok();
+
     result
 }
 

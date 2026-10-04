@@ -10,9 +10,12 @@ mod target;
 mod transaction;
 mod ui;
 
-use std::process::ExitCode;
+use std::{fs, path::Path, process::ExitCode};
 
-use config::{MachineConfig, detect_machine_config, validate_machine_config};
+use config::{
+    MachineConfig, detect_machine_config, render_machine_config, validate_machine_config,
+    validate_username_for_target,
+};
 use preflight::{
     HardwarePreparation, check_git, check_hardware_configuration, check_nix, check_nixos,
 };
@@ -68,19 +71,56 @@ fn main() -> ExitCode {
         return fail(error);
     }
 
+    let existing_machine_contents = match read_existing_machine_contents(&target) {
+        Ok(contents) => contents,
+        Err(error) => return fail(error),
+    };
+
     let detected = match detect_machine_config(&target) {
         Ok(config) => config,
         Err(error) => return fail(error),
     };
 
-    let selected = match select_machine_config(&detected) {
+    let selected = match select_machine_config(&target, &detected) {
         Ok(config) => config,
         Err(error) => return fail(error),
     };
 
+    let replacing_existing_machine =
+        existing_machine_contents.is_some() && machine_config_changed(&detected, &selected);
+
+    if replacing_existing_machine {
+        println!();
+        println!("  ! Existing machine.nix will be replaced.");
+        println!(
+            "  ! The installer only models its machine contract and cannot preserve \
+arbitrary declarations outside that contract."
+        );
+        println!("  ! The replacement is intentional only after this separate confirmation.");
+
+        match prompt_yes_no("Replace the existing machine.nix?") {
+            Ok(true) => {}
+            Ok(false) => {
+                return fail("existing machine.nix replacement cancelled".to_string());
+            }
+            Err(error) => return fail(error),
+        }
+    }
+
+    let machine_contents = match existing_machine_contents.as_deref() {
+        Some(existing) if !replacing_existing_machine => existing.to_string(),
+        _ => render_machine_config(&selected),
+    };
+
     print_machine_summary(&target, &selected);
 
-    match handle_machine_config(&target, &selected, hardware, &privilege_helper) {
+    match handle_machine_config(
+        &target,
+        &selected,
+        &machine_contents,
+        hardware,
+        &privilege_helper,
+    ) {
         Ok(()) => {
             println!();
             println!("Installer preflight completed.");
@@ -90,13 +130,38 @@ fn main() -> ExitCode {
     }
 }
 
+fn read_existing_machine_contents(target: &TargetRoot) -> Result<Option<String>, String> {
+    let path = target.machine_config();
+
+    if !path.is_file() {
+        return Ok(None);
+    }
+
+    let contents = fs::read_to_string(&path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+
+    Ok(Some(contents))
+}
+
+fn machine_config_changed(detected: &MachineConfig, selected: &MachineConfig) -> bool {
+    detected.system != selected.system
+        || detected.username != selected.username
+        || detected.hostname != selected.hostname
+        || detected.home_directory != selected.home_directory
+        || detected.personal_enable != selected.personal_enable
+        || detected.persistence_enable != selected.persistence_enable
+        || detected.persistence_path != selected.persistence_path
+}
+
 fn handle_machine_config(
     target: &TargetRoot,
     machine: &MachineConfig,
+    machine_contents: &str,
     hardware: HardwarePreparation,
-    privilege_helper: &std::path::Path,
+    privilege_helper: &Path,
 ) -> Result<(), String> {
     validate_machine_config(machine)?;
+    validate_username_for_target(target, &machine.username)?;
 
     if hardware == HardwarePreparation::Unavailable {
         return Err(
@@ -111,7 +176,13 @@ fn handle_machine_config(
         return Ok(());
     }
 
-    validate_and_install_machine_config(target, machine, hardware, privilege_helper)
+    validate_and_install_machine_config(
+        target,
+        machine,
+        machine_contents,
+        hardware,
+        privilege_helper,
+    )
 }
 
 fn fail(error: String) -> ExitCode {

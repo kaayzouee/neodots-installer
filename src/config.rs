@@ -20,14 +20,13 @@ pub struct MachineConfig {
 pub fn detect_machine_config(target: &TargetRoot) -> Result<MachineConfig, String> {
     println!("[machine]");
 
-    let detected_system = detect_system()?;
-    println!("  ✓ detected system: {detected_system}");
-
     if target.machine_config().is_file() {
         let existing = read_existing_machine_config(&target.machine_config())?;
         validate_machine_config(&existing)?;
+        validate_username_for_target(target, &existing.username)?;
 
         println!("  ✓ using existing machine.nix values");
+        println!("  ✓ system: {}", existing.system);
         println!("  ✓ username: {}", existing.username);
         println!("  ✓ hostname: {}", existing.hostname);
         println!("  ✓ home directory: {}", existing.home_directory);
@@ -44,8 +43,11 @@ pub fn detect_machine_config(target: &TargetRoot) -> Result<MachineConfig, Strin
         return Ok(existing);
     }
 
+    let detected_system = detect_system(target)?;
+    println!("  ✓ detected system: {detected_system}");
+
     let username = detect_target_username(target)?;
-    validate_username(&username)?;
+    validate_username_for_target(target, &username)?;
     println!("  ✓ detected username: {username}");
 
     let hostname = detect_hostname(target)?;
@@ -72,7 +74,23 @@ fn bool_label(value: bool) -> &'static str {
     if value { "enabled" } else { "disabled" }
 }
 
-fn detect_system() -> Result<String, String> {
+fn detect_system(target: &TargetRoot) -> Result<String, String> {
+    if let Some(system) = env::var_os("NEODOTS_TARGET_SYSTEM") {
+        let system = system
+            .into_string()
+            .map_err(|_| "NEODOTS_TARGET_SYSTEM is not valid UTF-8".to_string())?;
+
+        validate_system(&system)?;
+        return Ok(system);
+    }
+
+    if !target.is_live_root() {
+        return Err(
+            "cannot safely detect the architecture of a mounted target; set NEODOTS_TARGET_SYSTEM explicitly"
+                .to_string(),
+        );
+    }
+
     let output = Command::new("uname")
         .arg("-m")
         .output()
@@ -149,12 +167,14 @@ fn lookup_home_directory(target: &TargetRoot, username: &str) -> Result<String, 
 
         if fields[0] == username {
             let home = fields[5].trim();
+
             if home.is_empty() {
                 return Err(format!(
                     "target user {username} has an empty home directory in {}",
                     target.passwd_path().display()
                 ));
             }
+
             return Ok(home.to_string());
         }
     }
@@ -163,13 +183,30 @@ fn lookup_home_directory(target: &TargetRoot, username: &str) -> Result<String, 
 }
 
 fn detect_hostname(target: &TargetRoot) -> Result<String, String> {
+    if let Some(hostname) = env::var_os("NEODOTS_TARGET_HOSTNAME") {
+        let hostname = hostname
+            .into_string()
+            .map_err(|_| "NEODOTS_TARGET_HOSTNAME is not valid UTF-8".to_string())?;
+
+        validate_hostname(&hostname)?;
+        return Ok(hostname);
+    }
+
     let hostname_path = target.hostname_path();
 
     if let Ok(contents) = fs::read_to_string(&hostname_path) {
         let hostname = contents.trim();
+
         if !hostname.is_empty() {
             return Ok(hostname.to_string());
         }
+    }
+
+    if !target.is_live_root() {
+        return Err(
+            "target /etc/hostname is missing or empty; set NEODOTS_TARGET_HOSTNAME explicitly"
+                .to_string(),
+        );
     }
 
     let output = Command::new("hostname")
@@ -198,17 +235,23 @@ fn read_existing_machine_config(path: &Path) -> Result<MachineConfig, String> {
 
     let system = parse_string_assignment(&contents, "system")
         .ok_or_else(|| format!("missing system in {}", path.display()))?;
+
     let username = parse_block_string_assignment(&contents, "neodots", "username")
         .ok_or_else(|| format!("missing neodots.username in {}", path.display()))?;
+
     let hostname = parse_block_string_assignment(&contents, "neodots", "hostname")
         .ok_or_else(|| format!("missing neodots.hostname in {}", path.display()))?;
+
     let home_directory = parse_block_string_assignment(&contents, "neodots", "homeDirectory")
         .ok_or_else(|| format!("missing neodots.homeDirectory in {}", path.display()))?;
+
     let personal_enable =
         parse_nested_bool_assignment(&contents, "neodots", "personal", "enable").unwrap_or(false);
+
     let persistence_enable =
         parse_nested_bool_assignment(&contents, "neodots", "persistence", "enable")
             .unwrap_or(false);
+
     let persistence_path =
         parse_nested_string_assignment(&contents, "neodots", "persistence", "path")
             .unwrap_or_else(|| "/persist".to_string());
@@ -227,11 +270,13 @@ fn read_existing_machine_config(path: &Path) -> Result<MachineConfig, String> {
 fn parse_string_assignment(contents: &str, key: &str) -> Option<String> {
     for line in contents.lines() {
         let line = line.trim();
+
         if !line.starts_with(key) {
             continue;
         }
 
         let (lhs, rhs) = line.split_once('=')?;
+
         if lhs.trim() != key {
             continue;
         }
@@ -264,6 +309,7 @@ fn parse_block_string_assignment(contents: &str, outer_block: &str, key: &str) -
         }
 
         depth = update_brace_depth(depth, trimmed);
+
         if depth == 0 {
             break;
         }
@@ -330,12 +376,14 @@ fn parse_nested_assignment(
             }
 
             nested_depth = update_brace_depth(nested_depth, trimmed);
+
             if nested_depth == 0 {
                 in_nested = false;
             }
         }
 
         outer_depth = update_brace_depth(outer_depth, trimmed);
+
         if outer_depth == 0 {
             break;
         }
@@ -408,15 +456,22 @@ fn nix_string(value: &str) -> String {
         .replace('\r', "\\r")
 }
 
+fn validate_system(value: &str) -> Result<(), String> {
+    match value {
+        "x86_64-linux" | "aarch64-linux" | "armv7l-linux" => Ok(()),
+        other => Err(format!(
+            "unsupported target system: {other}; expected x86_64-linux, aarch64-linux, or armv7l-linux"
+        )),
+    }
+}
+
 pub fn validate_machine_config(machine: &MachineConfig) -> Result<(), String> {
     validate_username(&machine.username)?;
     validate_hostname(&machine.hostname)?;
     validate_absolute_path(&machine.home_directory, "homeDirectory", false)?;
     validate_absolute_path(&machine.persistence_path, "persistence.path", true)?;
 
-    if machine.system.trim().is_empty() {
-        return Err("system must not be empty".to_string());
-    }
+    validate_system(&machine.system)?;
 
     if !is_nix_safe_string(&machine.system) {
         return Err("system contains characters unsafe for a Nix string".to_string());
@@ -448,12 +503,57 @@ pub fn validate_username(value: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub fn validate_username_for_target(target: &TargetRoot, value: &str) -> Result<(), String> {
+    validate_username(value)?;
+
+    if value == "root" {
+        return Err("username root is reserved".to_string());
+    }
+
+    let passwd = fs::read_to_string(target.passwd_path()).map_err(|error| {
+        format!(
+            "cannot inspect target system accounts in {}: {error}",
+            target.passwd_path().display()
+        )
+    })?;
+
+    for line in passwd.lines() {
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let fields: Vec<&str> = line.split(':').collect();
+
+        if fields.len() < 4 || fields[0] != value {
+            continue;
+        }
+
+        let uid = fields[2].parse::<u32>().map_err(|error| {
+            format!(
+                "target passwd entry for {value} has an invalid UID {:?}: {error}",
+                fields[2]
+            )
+        })?;
+
+        if uid < 1000 {
+            return Err(format!(
+                "username {value} is already used by a target system account (UID {uid})"
+            ));
+        }
+
+        break;
+    }
+
+    Ok(())
+}
+
 pub fn validate_hostname(value: &str) -> Result<(), String> {
     if value.is_empty() {
         return Err("hostname must not be empty".to_string());
     }
 
     let bytes = value.as_bytes();
+
     if !bytes[0].is_ascii_alphanumeric() || !bytes[bytes.len() - 1].is_ascii_alphanumeric() {
         return Err(format!("invalid hostname: {value}"));
     }
@@ -552,9 +652,11 @@ mod tests {
             "neodots-installer-test-{}",
             crate::privilege::timestamp_nanos()
         ));
+
         fs::write(&path, contents).unwrap();
 
         let config = read_existing_machine_config(&path).unwrap();
+
         assert!(config.personal_enable);
         assert!(config.persistence_enable);
         assert_eq!(config.persistence_path, "/persist");
@@ -592,8 +694,68 @@ mod tests {
     }
 
     #[test]
+    fn mounted_target_does_not_fall_back_to_installer_architecture() {
+        let root = std::env::temp_dir().join(format!(
+            "neodots-installer-target-system-{}",
+            crate::privilege::timestamp_nanos()
+        ));
+
+        fs::create_dir_all(root.join("etc/nixos/hosts/nixos")).unwrap();
+
+        let target = TargetRoot::from_path(root.clone()).unwrap();
+        let error = detect_system(&target).unwrap_err();
+
+        assert!(error.contains("NEODOTS_TARGET_SYSTEM"));
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn mounted_target_does_not_fall_back_to_installer_hostname() {
+        let root = std::env::temp_dir().join(format!(
+            "neodots-installer-target-hostname-{}",
+            crate::privilege::timestamp_nanos()
+        ));
+
+        fs::create_dir_all(root.join("etc/nixos")).unwrap();
+
+        let target = TargetRoot::from_path(root.clone()).unwrap();
+        let error = detect_hostname(&target).unwrap_err();
+
+        assert!(error.contains("NEODOTS_TARGET_HOSTNAME"));
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn system_account_usernames_are_rejected_for_a_target() {
+        let root = std::env::temp_dir().join(format!(
+            "neodots-installer-target-passwd-{}",
+            crate::privilege::timestamp_nanos()
+        ));
+
+        let etc = root.join("etc");
+        fs::create_dir_all(&etc).unwrap();
+
+        fs::write(
+            etc.join("passwd"),
+            "root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\nalice:x:1000:100:Alice:/home/alice:/bin/bash\n",
+        )
+        .unwrap();
+
+        let target = TargetRoot::from_path(root.clone()).unwrap();
+
+        assert!(validate_username_for_target(&target, "root").is_err());
+        assert!(validate_username_for_target(&target, "daemon").is_err());
+        assert!(validate_username_for_target(&target, "alice").is_ok());
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
     fn nix_string_escaping_works() {
         let value = "path\\with\"quotes\n";
+
         assert_eq!(nix_string(value), "path\\\\with\\\"quotes\\n");
     }
 }
